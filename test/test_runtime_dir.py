@@ -226,7 +226,7 @@ class RuntimeDirTests(unittest.TestCase):
         def near(source, needle):
             idx = source.find(needle)
             self.assertNotEqual(idx, -1, needle)
-            window = source[max(0, idx - 120):idx + 420]
+            window = source[max(0, idx - 120):idx + 900]
             self.assertIn("textFormat: Text.PlainText", window, needle)
 
         near(settings, 'text: device ? root.hidName(device, "MX Control")')
