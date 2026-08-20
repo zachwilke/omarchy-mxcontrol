@@ -175,6 +175,12 @@ function hasSpot(board, id) {
   return spotIds(board).indexOf(String(id)) !== -1
 }
 
+check("status lastError strips", Model.parseStatus('{"ok":true,"lastError":"<img src=\\"https://evil\\"> offline"}').lastError, "&lt;img src=\"https://evil\"&gt; offline")
+check("status message strips", Model.parseStatus('{"ok":false,"message":"<b>nope</b>"}').message, "&lt;b&gt;nope&lt;/b&gt;")
+check("progress label strips", Model.parseProgress({ done: 1, total: 2, label: '<img src="https://evil">' }).label, "&lt;img src=\"https://evil\"&gt;")
+check("mouse family label name", Model.mouseFamilyLabel("master", { name: "MX Master 3S" }), "MX Master 3S")
+check("mouse family label markup", Model.mouseFamilyLabel("master", { name: '<img src="https://evil">' }), "&lt;img src=\"https://evil\"&gt;")
+check("mouse family label fallback", Model.mouseFamilyLabel("anywhere", {}), "MX Anywhere")
 check("mouse family master", Model.mouseFamily({ name: "MX Master 3S", productId: "B034" }), "master")
 check("mouse family anywhere", Model.mouseFamily({ name: "MX Anywhere 3" }), "anywhere")
 check("mouse family vertical", Model.mouseFamily({ name: "MX Vertical", productId: "B020" }), "vertical")
@@ -196,6 +202,23 @@ check("master gesture", hasSpot(masterBoard, "195"), true)
 check("master smartshift", hasSpot(masterBoard, "196"), true)
 check("master left remap", hasSpot(masterBoard, "80"), true)
 check("master no rows", !!(masterBoard && masterBoard.rows && masterBoard.rows.length === 0), true)
+check("master leftover markup", (function() {
+  var dirty = Model.divertLayout(
+    { name: "MX Master 3S", kind: "mouse", productId: "B034" },
+    { keys: masterDivert.keys.concat([{ key: "999", label: '<img src="https://evil">' }]) },
+    masterRemap
+  )
+  var extras = dirty && dirty.extras ? dirty.extras : []
+  for (var i = 0; i < extras.length; i++) {
+    if (String(extras[i].id) === "999") return extras[i].title
+  }
+  return ""
+})(), "&lt;img src=\"https://evil\"&gt;")
+check("master dirty family label", Model.divertLayout(
+  { name: '<img src="https://evil">', kind: "mouse", productId: "B034" },
+  masterDivert,
+  masterRemap
+).familyLabel, "&lt;img src=\"https://evil\"&gt;")
 
 var anywhereBoard = Model.divertLayout({ name: "MX Anywhere 3", kind: "mouse" }, keysOf("82", "83", "86", "237"))
 check("anywhere view", anywhereBoard && anywhereBoard.family, "anywhere")

@@ -772,6 +772,7 @@ Panel {
                   return "Reading " + mx.progressLabel + "…"
                 return "Reading settings from the device…"
               }
+              textFormat: Text.PlainText
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption

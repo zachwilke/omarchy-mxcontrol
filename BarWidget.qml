@@ -106,7 +106,7 @@ BarWidget {
     bar: root.bar
     tooltipText: {
       if (!mx.hasDevice) return mx.installed ? "No MX device" : "MX Control — install Solaar"
-      var name = mx.selectedDevice && mx.selectedDevice.name ? String(mx.selectedDevice.name) : "MX"
+      var name = Model.plainHidText(mx.selectedDevice && mx.selectedDevice.name ? mx.selectedDevice.name : "MX")
       var link = Model.connectionLabel(mx.selectedDevice)
       var battery = mx.batteryPercent >= 0 ? (" · " + mx.batteryPercent + "%") : ""
       return name + (link ? (" · " + link) : "") + battery

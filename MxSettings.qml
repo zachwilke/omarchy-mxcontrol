@@ -253,6 +253,7 @@ Item {
                 width: parent.width - Style.font.display - parent.spacing
                 Text {
                   text: device ? root.hidName(device, "MX Control") : "MX Control"
+                  textFormat: Text.PlainText
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.subtitle
@@ -268,6 +269,7 @@ Item {
                     parts.push("All settings")
                     return parts.join(" · ")
                   }
+                  textFormat: Text.PlainText
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -309,6 +311,7 @@ Item {
               text: mx.daemonWanted
                 ? ("Reading settings" + (mx.progressLabel ? (" · " + mx.progressLabel) : "") + " · " + mx.readPercent + "%")
                 : "Open the bar icon once if settings do not appear."
+              textFormat: Text.PlainText
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -465,6 +468,7 @@ Item {
                     ? "Click a lit control to remap it or send it to HID++. Dim controls are not on this model."
                     : "F1–F12 are the function row. The small label is the default action; Fn swap changes whether you need Fn to get a real F-key. Grey keys are just the chassis."))
                   : "Regular is a normal click. Divert sends HID++ so Solaar rules can handle the press."
+                textFormat: Text.PlainText
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -497,10 +501,12 @@ Item {
                 width: parent.width
                 spacing: Style.space(6)
                 Text {
-                  text: root.selectedCapTitle()
-                    || (root.selectedDivertRow && root.selectedDivertRow.label)
-                    || (root.selectedRemapRow && root.selectedRemapRow.label)
-                    || "Control"
+                  text: root.hidName({
+                    name: root.selectedCapTitle()
+                      || (root.selectedDivertRow && root.selectedDivertRow.label)
+                      || (root.selectedRemapRow && root.selectedRemapRow.label)
+                  }, "Control")
+                  textFormat: Text.PlainText
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -629,7 +635,8 @@ Item {
                   width: column.width
                   spacing: Style.space(8)
                   Text {
-                    text: modelData && modelData.name ? String(modelData.name) : "Profile"
+                    text: root.hidName(modelData, "Profile")
+                    textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -1045,6 +1052,7 @@ Item {
             id: extraLabel
             anchors.centerIn: parent
             text: cap.title || cap.glyph || cap.id
+            textFormat: Text.PlainText
             color: root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

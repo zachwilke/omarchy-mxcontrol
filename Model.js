@@ -22,7 +22,7 @@ function parseProgress(raw) {
     done: done,
     total: total,
     percent: percent,
-    label: data.label ? String(data.label) : "",
+    label: data.label ? plainHidText(data.label) : "",
     phase: data.phase ? String(data.phase) : ""
   }
 }
@@ -74,8 +74,8 @@ function parseStatus(raw) {
       ok: data.ok !== false,
       installed: data.installed === true,
       accessible: data.accessible === true,
-      message: String(data.message || ""),
-      lastError: String(data.lastError || ""),
+      message: plainHidText(data.message || ""),
+      lastError: plainHidText(data.lastError || ""),
       devices: Array.isArray(data.devices) ? data.devices : [],
       adapters: Array.isArray(data.adapters) ? data.adapters : [],
       progress: parseProgress(data.progress),
@@ -739,7 +739,7 @@ function mouseFamily(device) {
 }
 
 function mouseFamilyLabel(family, device) {
-  var name = device && device.name ? String(device.name) : ""
+  var name = device && device.name ? plainHidText(device.name) : ""
   if (name) return name
   if (family === "anywhere") return "MX Anywhere"
   if (family === "vertical") return "MX Vertical"
@@ -916,10 +916,11 @@ function bindMouseLayout(view, divertSetting, remapSetting) {
       var id = String(item.key)
       if (placed[id] || seen[id]) continue
       seen[id] = true
+      var label = plainHidText(item.label || String(id))
       extras.push({
         id: id,
-        glyph: faceFor(id, item.label).glyph,
-        title: item.label || String(id),
+        glyph: faceFor(id, label).glyph,
+        title: label,
         row: divert.byId[id] || null,
         remap: remap.byId[id] || null
       })

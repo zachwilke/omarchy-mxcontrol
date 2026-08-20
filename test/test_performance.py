@@ -143,11 +143,18 @@ class PerformanceTests(unittest.TestCase):
 
     def test_profile_name_and_store(self):
         self.assertEqual(self.mxctl.sanitize_profile_name("  Desk  "), "Desk")
+        self.assertEqual(self.mxctl.sanitize_profile_name('  <Desk>  '), "Desk")
         self.mxctl.write_profiles({"version": 1, "profiles": [{"name": "Desk", "settings": []}]})
         names = [row["name"] for row in self.mxctl.load_profiles()["profiles"]]
         self.assertEqual(names, ["Desk"])
         self.mxctl.profile_delete({"name": "Desk"})
         self.assertEqual(self.mxctl.load_profiles()["profiles"], [])
+        too_many = [{"name": f"p{i}", "settings": []} for i in range(self.mxctl.PROFILE_MAX_COUNT + 5)]
+        self.mxctl.write_profiles({"version": 1, "profiles": too_many})
+        self.assertEqual(len(self.mxctl.load_profiles()["profiles"]), self.mxctl.PROFILE_MAX_COUNT)
+        huge = {"name": "Big", "settings": [{"name": "x", "value": "y" * self.mxctl.PROFILE_MAX_BYTES}]}
+        with self.assertRaises(ValueError):
+            self.mxctl.write_profiles({"version": 1, "profiles": [huge]})
 
     def test_progress_payload_percent(self):
         half = self.mxctl.progress_payload(1, 2, "MX Master 3S", "hidpp")

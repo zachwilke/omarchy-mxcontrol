@@ -16,20 +16,31 @@ ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "mxctl.py"
 SERVICE = ROOT / "Service.qml"
 MODEL = ROOT / "Model.js"
+SETTINGS = ROOT / "MxSettings.qml"
+PANEL = ROOT / "Panel.qml"
+BAR = ROOT / "BarWidget.qml"
 
 
 class RuntimeDirTests(unittest.TestCase):
     def setUp(self):
         self.xdg = tempfile.mkdtemp(prefix="omarchy-mx-test-")
+        self.config = tempfile.mkdtemp(prefix="omarchy-mx-cfg-")
         self.old_xdg = os.environ.get("XDG_RUNTIME_DIR")
+        self.old_config = os.environ.get("XDG_CONFIG_HOME")
         os.environ["XDG_RUNTIME_DIR"] = self.xdg
+        os.environ["XDG_CONFIG_HOME"] = self.config
 
     def tearDown(self):
         if self.old_xdg is None:
             os.environ.pop("XDG_RUNTIME_DIR", None)
         else:
             os.environ["XDG_RUNTIME_DIR"] = self.old_xdg
+        if self.old_config is None:
+            os.environ.pop("XDG_CONFIG_HOME", None)
+        else:
+            os.environ["XDG_CONFIG_HOME"] = self.old_config
         shutil.rmtree(self.xdg, ignore_errors=True)
+        shutil.rmtree(self.config, ignore_errors=True)
 
     def run_helper(self, *args, env=None):
         merged = os.environ.copy() if env is None else dict(env)
@@ -53,9 +64,12 @@ class RuntimeDirTests(unittest.TestCase):
         service = SERVICE.read_text(encoding="utf-8")
         python = HELPER.read_text(encoding="utf-8")
         model = MODEL.read_text(encoding="utf-8")
+        settings = SETTINGS.read_text(encoding="utf-8")
         self.assertNotIn("/tmp", service)
         self.assertNotIn("/var/tmp", service)
         self.assertNotIn("/tmp", model)
+        self.assertNotIn("/tmp", settings)
+        self.assertNotIn("/var/tmp", settings)
         self.assertNotIn("/tmp/omarchy-mx", python)
         self.assertIn('Quickshell.env("XDG_RUNTIME_DIR")', service)
         self.assertIn("/run/user/", service)
@@ -142,6 +156,89 @@ class RuntimeDirTests(unittest.TestCase):
         proc = self.run_helper("serve")
         self.assertEqual(proc.returncode, 3, proc.stderr)
         self.assertLess(time.perf_counter() - started, 0.6)
+
+    def test_profiles_dir_mode_0700(self):
+        path = mxctl.profiles_file()
+        self.assertEqual(path, Path(self.config) / "omarchy-mx" / "profiles.json")
+        self.assertTrue(path.parent.is_dir())
+        self.assertFalse(path.parent.is_symlink())
+        self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+
+    def test_profiles_dir_chmods_existing(self):
+        folder = Path(self.config) / "omarchy-mx"
+        folder.mkdir(mode=0o755)
+        os.chmod(folder, 0o755)
+        path = mxctl.profiles_file()
+        self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+
+    def test_profiles_dir_replaces_nondir_and_symlink(self):
+        folder = Path(self.config) / "omarchy-mx"
+        folder.write_text("not-a-dir\n", encoding="utf-8")
+        path = mxctl.profiles_file()
+        self.assertTrue(path.parent.is_dir())
+        self.assertFalse(path.parent.is_symlink())
+        real = Path(self.config) / "other"
+        real.mkdir()
+        if path.parent.exists():
+            shutil.rmtree(path.parent)
+        folder.symlink_to(real)
+        path = mxctl.profiles_file()
+        self.assertTrue(path.parent.is_dir())
+        self.assertFalse(path.parent.is_symlink())
+        self.assertTrue(real.is_dir())
+
+    def test_profiles_read_symlink_does_not_follow(self):
+        victim = Path(self.config) / "secret.json"
+        victim.write_text('{"version": 1, "profiles": [{"name": "Stolen"}]}\n', encoding="utf-8")
+        folder = Path(self.config) / "omarchy-mx"
+        folder.mkdir()
+        planted = folder / "profiles.json"
+        planted.symlink_to(victim)
+        data = mxctl.load_profiles()
+        self.assertEqual(data["profiles"], [])
+        self.assertEqual(json.loads(victim.read_text(encoding="utf-8"))["profiles"][0]["name"], "Stolen")
+        self.assertTrue(planted.is_symlink())
+
+    def test_profiles_write_mode_0600(self):
+        mxctl.write_profiles({"version": 1, "profiles": [{"name": "Desk", "settings": []}]})
+        path = mxctl.profiles_file()
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertFalse(path.is_symlink())
+
+    def test_profile_name_strips_markup(self):
+        self.assertEqual(mxctl.sanitize_profile_name("  Desk  "), "Desk")
+        self.assertEqual(mxctl.sanitize_profile_name('  <Desk>  '), "Desk")
+        self.assertEqual(mxctl.sanitize_profile_name('<img src="https://evil">'), 'img src="https://evil"')
+        with self.assertRaises(ValueError):
+            mxctl.sanitize_profile_name("<>")
+
+    def test_profile_apply_skips_change_host(self):
+        source = HELPER.read_text(encoding="utf-8")
+        start = source.index("def profile_apply")
+        end = source.index("def apply_cmd")
+        self.assertIn("PROFILE_SKIP", source[start:end])
+
+    def test_hid_facing_texts_are_plain(self):
+        settings = SETTINGS.read_text(encoding="utf-8")
+        panel = PANEL.read_text(encoding="utf-8")
+        bar = BAR.read_text(encoding="utf-8")
+
+        def near(source, needle):
+            idx = source.find(needle)
+            self.assertNotEqual(idx, -1, needle)
+            window = source[max(0, idx - 120):idx + 420]
+            self.assertIn("textFormat: Text.PlainText", window, needle)
+
+        near(settings, 'text: device ? root.hidName(device, "MX Control")')
+        near(settings, "Reading settings")
+        near(settings, "root.divertBoard.familyLabel")
+        near(settings, "root.selectedCapTitle()")
+        near(settings, 'text: root.hidName(modelData, "Profile")')
+        near(settings, "cap.title || cap.glyph || cap.id")
+        near(panel, "return mx.lastError")
+        self.assertIn("Model.plainHidText", bar)
+        self.assertIn("tooltipText", bar)
+        self.assertIn("function hidName", settings)
 
 
 if __name__ == "__main__":

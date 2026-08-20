@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import select
+import stat
 import sys
 import time
 from pathlib import Path
@@ -69,7 +70,7 @@ def emit(payload: dict, code: int = 0) -> None:
 
 
 def fail(message: str, **extra) -> None:
-    payload = {"ok": False, "message": message, "devices": []}
+    payload = {"ok": False, "message": plain_hid_text(message), "devices": []}
     payload.update(extra)
     emit(payload, 1)
 
@@ -606,11 +607,16 @@ def runtime_path(xdg_runtime_dir: str | None, uid: int) -> str:
     return f"/run/user/{uid}/omarchy-mx"
 
 
-def runtime_dir() -> Path:
-    path = Path(runtime_path(os.environ.get("XDG_RUNTIME_DIR"), os.getuid()))
+def ensure_private_dir(path: Path) -> Path:
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        path.unlink()
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(path, 0o700)
     return path
+
+
+def runtime_dir() -> Path:
+    return ensure_private_dir(Path(runtime_path(os.environ.get("XDG_RUNTIME_DIR"), os.getuid())))
 
 
 def _is_nofollow_error(exc: OSError) -> bool:
@@ -630,6 +636,7 @@ def _create_exclusive(path: Path, data: bytes) -> None:
         fd = os.open(tmp, flags, 0o600)
     try:
         os.write(fd, data)
+        os.fchmod(fd, 0o600)
     finally:
         os.close(fd)
     os.replace(tmp, path)
@@ -651,6 +658,7 @@ def write_bytes(path: Path, data: bytes) -> None:
         return
     try:
         os.write(fd, data)
+        os.fchmod(fd, 0o600)
     finally:
         os.close(fd)
 
@@ -993,7 +1001,7 @@ def status_from_described(described, hid_devices, adapters, permission_error, la
         "devices": devices,
         "adapters": adapters,
         "serving": True,
-        "lastError": last_error,
+        "lastError": plain_hid_text(last_error),
         "progress": progress_payload(len(described), len(described), "", "idle"),
     }
 
@@ -1094,7 +1102,7 @@ def set_command(argv: list[str]) -> None:
         except Exception:
             online = False
         if not online:
-            fail(f"{getattr(dev, 'name', device_name)} is offline", installed=True, accessible=True)
+            fail(f"{plain_hid_text(getattr(dev, 'name', device_name))} is offline", installed=True, accessible=True)
         mods["configuration"].attach_to(dev)
         raw = list(getattr(dev, "settings", None) or [])
         try:
@@ -1119,40 +1127,69 @@ def set_command(argv: list[str]) -> None:
             }
         )
     except Exception as exc:
-        fail(str(exc), installed=True, accessible=True)
+        fail(plain_hid_text(str(exc)), installed=True, accessible=True)
     finally:
         close_all(mods)
 
 
 PROFILE_SKIP = {"change-host", "change_host"}
+PROFILE_MAX_COUNT = 40
+PROFILE_MAX_BYTES = 262144
+
+
+def profiles_dir() -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return ensure_private_dir(Path(base) / "omarchy-mx")
 
 
 def profiles_file() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    folder = Path(base) / "omarchy-mx"
-    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-    return folder / "profiles.json"
+    return profiles_dir() / "profiles.json"
 
 
 def load_profiles() -> dict:
+    empty = {"version": 1, "profiles": []}
     path = profiles_file()
-    if not path.is_file():
-        return {"version": 1, "profiles": []}
+    flags = os.O_RDONLY | os.O_NOFOLLOW
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        return empty
+    except OSError as exc:
+        if _is_nofollow_error(exc):
+            return empty
+        raise
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return empty
+        raw = os.read(fd, PROFILE_MAX_BYTES + 1)
+    finally:
+        os.close(fd)
+    if not raw or len(raw) > PROFILE_MAX_BYTES:
+        return empty
+    try:
+        data = json.loads(raw.decode("utf-8"))
     except Exception:
-        return {"version": 1, "profiles": []}
+        return empty
     if not isinstance(data, dict) or not isinstance(data.get("profiles"), list):
-        return {"version": 1, "profiles": []}
-    return {"version": 1, "profiles": data["profiles"]}
+        return empty
+    return {"version": 1, "profiles": data["profiles"][:PROFILE_MAX_COUNT]}
 
 
 def write_profiles(data: dict) -> None:
-    write_bytes(profiles_file(), (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+    profiles = list(data.get("profiles") or [])
+    if len(profiles) > PROFILE_MAX_COUNT:
+        profiles = profiles[-PROFILE_MAX_COUNT:]
+    payload = {"version": 1, "profiles": profiles}
+    raw = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    if len(raw) > PROFILE_MAX_BYTES:
+        raise ValueError("profile store is too large")
+    path = profiles_file()
+    write_bytes(path, raw)
+    os.chmod(path, 0o600)
 
 
 def sanitize_profile_name(raw) -> str:
-    text = " ".join(str(raw or "").split())
+    text = plain_hid_text(" ".join(str(raw or "").split()))
     if not text:
         raise ValueError("profile name is empty")
     if len(text) > 40:
@@ -1188,7 +1225,7 @@ def profile_save(mods, opened, cmd: dict) -> None:
     if not dev:
         raise RuntimeError(f"no device matching '{cmd.get('device')}'")
     if not device_is_online(dev):
-        raise RuntimeError(f"{getattr(dev, 'name', 'device')} is offline")
+        raise RuntimeError(f"{plain_hid_text(getattr(dev, 'name', 'device'))} is offline")
     entry = {
         "name": name,
         "deviceId": device_id(dev),
@@ -1224,7 +1261,7 @@ def profile_apply(mods, opened, cmd: dict) -> None:
     if not dev:
         raise RuntimeError(f"no device matching '{cmd.get('device')}'")
     if not device_is_online(dev):
-        raise RuntimeError(f"{getattr(dev, 'name', 'device')} is offline")
+        raise RuntimeError(f"{plain_hid_text(getattr(dev, 'name', 'device'))} is offline")
     mods["configuration"].attach_to(dev)
     raw = list(getattr(dev, "settings", None) or [])
     if not any(item is not None for item in raw):
@@ -1233,7 +1270,10 @@ def profile_apply(mods, opened, cmd: dict) -> None:
         except Exception:
             pass
     for row in found.get("settings") or []:
-        setting = find_setting(dev, str(row.get("name") or ""))
+        setting_name = str(row.get("name") or "")
+        if not setting_name or setting_name in PROFILE_SKIP:
+            continue
+        setting = find_setting(dev, setting_name)
         if setting is None:
             continue
         key = row.get("key")
@@ -1262,7 +1302,7 @@ def apply_cmd(mods, opened, cmd: dict) -> None:
     if not dev:
         raise RuntimeError(f"no device matching '{cmd.get('device')}'")
     if not device_is_online(dev):
-        raise RuntimeError(f"{getattr(dev, 'name', 'device')} is offline")
+        raise RuntimeError(f"{plain_hid_text(getattr(dev, 'name', 'device'))} is offline")
     mods["configuration"].attach_to(dev)
     raw = list(getattr(dev, "settings", None) or [])
     if not any(item is not None for item in raw):
@@ -1452,7 +1492,7 @@ def serve_command() -> int:
                     payload["adapters"] = adapters
                 topology = next_topology
             except Exception as exc:
-                last_error = str(exc)
+                last_error = plain_hid_text(str(exc))
             payload["lastError"] = last_error
             publish(payload)
     except KeyboardInterrupt:
