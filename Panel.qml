@@ -489,10 +489,10 @@ Panel {
               visible: !!(reportSetting && (reportSetting.kind === "range" || (reportSetting.choices && reportSetting.choices.length)))
               width: parent.width
               title: "Report rate"
-              subtitle: reportSetting ? (Math.round(Model.numericValue(reportSetting, 0)) + " Hz") : ""
-              info: Model.helpForSetting(reportSetting, "How often the mouse reports movement. 8K is 8000 Hz when the device supports it.")
+              subtitle: reportSetting ? Model.reportRateLabel(Model.numericValue(reportSetting, 0)) : ""
+              info: Model.helpForSetting(reportSetting, "How often the mouse reports movement, shown as Hz. Devices store the polling interval in milliseconds, so 1 ms is 1000 Hz.")
               setting: reportSetting
-              formatValue: function(v) { return Math.round(v) + " Hz" }
+              formatValue: function(v) { return Model.reportRateLabel(v) }
             }
 
             HintedToggle {
@@ -822,29 +822,35 @@ Panel {
 
     spacing: Style.space(4)
 
-    Row {
+    Item {
       width: parent.width
-      spacing: Style.space(8)
+      height: Math.max(titleLabel.implicitHeight, valueLabel.implicitHeight)
       Text {
+        id: titleLabel
         text: sliderBlock.title
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
         font.bold: true
+        anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
       }
       InfoHint {
+        anchors.left: titleLabel.right
+        anchors.leftMargin: Style.space(8)
         anchors.verticalCenter: parent.verticalCenter
         text: sliderBlock.info !== "" ? sliderBlock.info : Model.helpForSetting(sliderBlock.setting, "")
       }
-      Item { width: Math.max(0, parent.width - parent.children[0].width - parent.children[1].width - valueLabel.width - parent.spacing * 2); height: 1 }
       Text {
         id: valueLabel
         text: sliderBlock.liveSubtitle !== "" ? sliderBlock.liveSubtitle : sliderBlock.subtitle
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
+        anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
+        elide: Text.ElideRight
+        width: Math.min(implicitWidth, parent.width - titleLabel.implicitWidth - Style.space(40))
       }
     }
 
@@ -878,6 +884,7 @@ Panel {
         hoverEnabled: true
         acceptedButtons: Qt.NoButton
         onEntered: sliderBlock.hoveredIn()
+        onExited: root.cursorActive = false
       }
     }
   }

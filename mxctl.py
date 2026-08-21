@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import ast
 import errno
 import fcntl
 import importlib.util
@@ -78,6 +79,43 @@ def fail(message: str, **extra) -> None:
     emit(payload, 1)
 
 
+# HID++ error codes from Solaar's error responses (0x0B2B writes and friends).
+_HIDPP_ERROR_NAMES = {
+    1: "invalid sub-header",
+    2: "invalid argument",
+    3: "value out of range",
+    4: "wrong key type",
+    5: "resource error",
+    6: "not found",
+    7: "connection lost",
+    8: "too many devices",
+}
+
+
+def friendly_error(exc: BaseException) -> str:
+    """Turn Solaar's raw HID++ error payloads into something readable.
+
+    Without this, a rejected write shows the user an opaque dict like
+    {'number': 1, 'request': 2859, 'error': 2, 'params': b'\\x01'}.
+    """
+    raw = str(exc)
+    if not raw.lstrip().startswith("{"):
+        return raw
+    try:
+        parsed = ast.literal_eval(raw)
+        if not isinstance(parsed, dict):
+            return raw
+        code = parsed.get("error")
+        name = _HIDPP_ERROR_NAMES.get(code if isinstance(code, int) else -1)
+        detail = f"HID++ error {code} ({name})" if name else f"HID++ error {code}"
+        return (
+            f"The device rejected this change ({detail}). "
+            "Some settings, like report rate, are ignored while Onboard Profiles is active."
+        )
+    except (ValueError, SyntaxError):
+        return raw
+
+
 def hid_name_from_uevent(text: str) -> str:
     for line in text.splitlines():
         if line.startswith("HID_NAME="):
@@ -109,7 +147,7 @@ FALLBACK_RECEIVER_PIDS = {
 }
 
 MX_NAME_RE = re.compile(
-    r"(?:\bmx\b|master|anywhere|vertical|ergo|lift|mechanical|keys mini|mx keys|mx master)",
+    r"(?:\bmx\b|master|anywhere|vertical|ergo|lift|mechanical|keys mini|mx keys|mx master|\bg ?pro\b|\bg\d{3}\b)",
     re.IGNORECASE,
 )
 
@@ -1367,7 +1405,7 @@ def set_command(argv: list[str]) -> None:
             }
         )
     except Exception as exc:
-        fail(plain_hid_text(str(exc)), installed=True, accessible=True)
+        fail(plain_hid_text(friendly_error(exc)), installed=True, accessible=True)
     finally:
         close_all(mods)
 
@@ -1853,7 +1891,7 @@ def serve_command() -> int:
                         apply_cmd(mods, opened, cmd)
                         last_error = ""
                     except Exception as exc:
-                        last_error = str(exc)
+                        last_error = plain_hid_text(friendly_error(exc))
                 hid_devices, adapters = scan_hidraw_with_battery()
                 targets = set(plan["set_devices"])
                 if not plan["full"] and len(targets) == 1:

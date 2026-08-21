@@ -122,6 +122,15 @@ function numericValue(setting, fallback) {
   return isFinite(n) ? n : fallback
 }
 
+function reportRateLabel(value) {
+  // Solaar stores the report rate as the polling interval in milliseconds
+  // (1 means 1000 Hz). Convert so the UI can talk in Hz like Logitech does.
+  var ms = Number(value)
+  if (!isFinite(ms) || ms <= 0) return ""
+  var hz = Math.round(1000 / ms)
+  return hz >= 1000 ? ((hz / 1000) + " kHz") : (hz + " Hz")
+}
+
 function boolValue(setting) {
   var value = settingValue(setting)
   if (value && typeof value === "object" && value.id !== undefined) return Number(value.id) !== 0
@@ -408,9 +417,9 @@ var SETTING_HELP = {
   "dpi": "How far the pointer travels, in 50 DPI steps from 200 to 8000. 8K is the sensor maximum (8000 DPI).",
   "dpi-extended": "How far the pointer travels. 8K is the sensor maximum when the device supports 8000 DPI.",
   "dpi_extended": "How far the pointer travels. 8K is the sensor maximum when the device supports 8000 DPI.",
-  "report_rate": "How often the mouse reports movement, in Hz. 8K is 8000 Hz when the device supports it.",
-  "report-rate": "How often the mouse reports movement, in Hz. 8K is 8000 Hz when the device supports it.",
-  "report_rate_extended": "How often the mouse reports movement, in Hz. 8K is 8000 Hz when the device supports it.",
+  "report_rate": "How often the mouse reports movement, shown as Hz. Devices store the polling interval in milliseconds, so 1 ms is 1000 Hz.",
+  "report-rate": "How often the mouse reports movement, shown as Hz. Devices store the polling interval in milliseconds, so 1 ms is 1000 Hz.",
+  "report_rate_extended": "How often the mouse reports movement, shown as Hz. Devices store the polling interval in milliseconds, so 1 ms is 1000 Hz.",
   "pointer_speed": "A software pointer-speed multiplier on top of the hardware DPI.",
   "pointer-speed": "A software pointer-speed multiplier on top of the hardware DPI.",
   "scroll-ratchet": "When on, the MagSpeed wheel clicks at slow speeds and free-spins when you scroll quickly. Off is always free-spin.",
@@ -1121,6 +1130,7 @@ if (typeof module !== "undefined") {
     plainHidText: plainHidText,
     hidDisplayName: hidDisplayName,
     runtimeDir: runtimeDir,
-    parseProgress: parseProgress
+    parseProgress: parseProgress,
+    reportRateLabel: reportRateLabel
   }
 }
