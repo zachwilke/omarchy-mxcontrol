@@ -34,6 +34,9 @@ Panel {
   readonly property var thumbModeSetting: Model.settingByNames(device, ["thumb-scroll-mode"])
   readonly property var hostSetting: Model.settingByNames(device, ["change-host", "change_host"])
   readonly property var reportSetting: Model.settingByNames(device, ["report_rate", "report-rate", "report_rate_extended"])
+  readonly property var ledControlSetting: Model.settingByNames(device, ["led_control"])
+  readonly property var ledZoneSettings: Model.ledZones(device)
+  readonly property bool showLighting: !!(ledControlSetting && ledZoneSettings.length > 0)
   readonly property var smartState: Model.smartShiftState(smartSetting)
   readonly property var hostOptions: Model.hostOptions(device)
   readonly property bool showDevices: mx && mx.displayDevices && mx.displayDevices.length > 1
@@ -143,6 +146,7 @@ Panel {
     if (showDevices) sections.push("devices")
     if (root.canWrite) {
       if (showPointer) sections.push("pointer")
+      if (showLighting) sections.push("lighting")
       if (showScroll) sections.push("scroll")
       if (showThumb) sections.push("thumb")
       if (showHosts) sections.push("hosts")
@@ -153,6 +157,7 @@ Panel {
   function sectionCount(section) {
     if (section === "devices") return mx && mx.displayDevices ? mx.displayDevices.length : 0
     if (section === "pointer") return (dpiSetting ? 1 : 0) + (pointerSetting ? 1 : 0)
+    if (section === "lighting") return ledZoneSettings.length
     if (section === "scroll") return (smartSetting ? 1 : 0) + (invertSetting ? 1 : 0) + (hiresSetting ? 1 : 0)
     if (section === "thumb") return (thumbInvertSetting ? 1 : 0) + (thumbModeSetting ? 1 : 0)
     if (section === "hosts") return hostOptions.length
@@ -506,6 +511,109 @@ Panel {
           }
 
           Column {
+            visible: root.showLighting && root.canWrite
+            width: parent.width
+            spacing: Style.space(8)
+
+            PanelSeparator { foreground: root.foreground }
+            PanelSectionHeader {
+              text: "LIGHTING"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            HintedToggle {
+              visible: !!ledControlSetting
+              width: parent.width
+              label: "Host control"
+              info: "Let this panel drive the mouse LEDs instead of the onboard profile. Turn it off to hand the LEDs back."
+              checked: ledControlSetting ? Model.boolValue(ledControlSetting) : false
+              onClicked: root.writeToggle(ledControlSetting)
+            }
+
+            Repeater {
+              model: ledZoneSettings
+
+              delegate: Column {
+                required property var modelData
+                readonly property var zone: modelData
+                readonly property var zoneEffects: zone && zone.effects ? zone.effects : []
+                readonly property var currentValue: zone && zone.value ? zone.value : {}
+                readonly property int currentId: currentValue.ID !== undefined ? Number(currentValue.ID) : -1
+                readonly property var currentEffect: zoneEffects.find(function(e) { return e.id === currentId }) || null
+                readonly property bool needsColor: !!currentEffect && currentEffect.params.some(function(p) { return p.name === "color" })
+                width: parent.width
+                spacing: Style.space(6)
+
+                function pickEffect(idv) {
+                  var payload = { ID: idv }
+                  var eff = zoneEffects.find(function(e) { return e.id === idv })
+                  if (!eff) {
+                    root.writeSetting(zone, payload)
+                    return
+                  }
+                  // Seed every declared parameter; zeros make effects
+                  // degenerate (a 0 ms period breathes nothing at all).
+                  for (var i = 0; i < eff.params.length; i++) {
+                    var p = eff.params[i]
+                    if (p.name === "color") payload.color = Model.ledCurrentColor(currentValue)
+                    else if (p.kind === "range" || p.kind === "choice") payload[p.name] = Model.ledRangeDefault(p)
+                  }
+                  root.writeSetting(zone, payload)
+                }
+
+                Row {
+                  width: parent.width
+                  spacing: Style.space(8)
+                  Text {
+                    text: zone && zone.label ? String(zone.label).toUpperCase() : "ZONE"
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                  }
+                  InfoHint { text: Model.helpForSetting(zone, "Pick an effect for this LED zone.") }
+                }
+
+                Flow {
+                  width: parent.width
+                  spacing: Style.space(6)
+
+                  Repeater {
+                    model: zoneEffects
+                    delegate: Button {
+                      required property var modelData
+                      text: modelData.label
+                      selected: currentId === Number(modelData.id)
+                      bordered: true
+                      focusable: false
+                      foreground: root.foreground
+                      accent: root.accent
+                      fontFamily: root.fontFamily
+                      onClicked: pickEffect(Number(modelData.id))
+                    }
+                  }
+                }
+
+                Flow {
+                  visible: needsColor
+                  width: parent.width
+                  spacing: Style.space(8)
+                  Repeater {
+                    model: Model.ledPalette()
+                    delegate: LedColorSwatch {
+                      required property var modelData
+                      swatchColor: modelData.color
+                      selected: currentValue.color !== undefined && Number(currentValue.color) === modelData.value
+                      onPicked: root.writeSetting(zone, { ID: currentId, color: modelData.value })
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          Column {
             visible: root.showScroll && root.canWrite
             width: parent.width
             spacing: Style.space(8)
@@ -800,6 +908,23 @@ Panel {
       id: hintedInfo
       anchors.verticalCenter: parent.verticalCenter
       text: hinted.info
+    }
+  }
+
+  component LedColorSwatch: Rectangle {
+    property color swatchColor: "#ffffff"
+    property bool selected: false
+    signal picked()
+    width: 22
+    height: 22
+    radius: 6
+    color: swatchColor
+    border.color: selected ? root.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.25)
+    border.width: selected ? 2 : 1
+    MouseArea {
+      anchors.fill: parent
+      cursorShape: Qt.PointingHandCursor
+      onClicked: parent.picked()
     }
   }
 

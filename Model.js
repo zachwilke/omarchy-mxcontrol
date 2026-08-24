@@ -131,6 +131,46 @@ function reportRateLabel(value) {
   return hz >= 1000 ? ((hz / 1000) + " kHz") : (hz + " Hz")
 }
 
+function ledZones(device) {
+  // Hetero LED zone settings (led_zone_1, led_zone_2, ...) in device order.
+  var out = []
+  var settings = device && device.settings ? device.settings : []
+  for (var i = 0; i < settings.length; i++) {
+    var s = settings[i]
+    if (s && s.name && String(s.name).indexOf("led_zone_") === 0) out.push(s)
+  }
+  return out
+}
+
+function ledCurrentColor(val) {
+  // Carry the zone's existing color across effect changes; sane default blue.
+  return val && val.color !== undefined ? Number(val.color) : 0x33ccff
+}
+
+function ledRangeDefault(param) {
+  // Sensible starting values so effects never run with degenerate params.
+  var name = String(param.name || "")
+  if (name === "intensity") return 50
+  if (name === "speed") return 127
+  var min = Number(param.min), max = Number(param.max)
+  if (isFinite(min) && isFinite(max) && max > min) return Math.round((min + max) / 2)
+  return 128
+}
+
+function ledPalette() {
+  return [
+    { color: "#ff3b30", value: 0xff3b30 },
+    { color: "#ff9500", value: 0xff9500 },
+    { color: "#ffd60a", value: 0xffd60a },
+    { color: "#34c759", value: 0x34c759 },
+    { color: "#00c7be", value: 0x00c7be },
+    { color: "#0a84ff", value: 0x0a84ff },
+    { color: "#bf5af2", value: 0xbf5af2 },
+    { color: "#ff2d95", value: 0xff2d95 },
+    { color: "#ffffff", value: 0xffffff }
+  ]
+}
+
 function boolValue(setting) {
   var value = settingValue(setting)
   if (value && typeof value === "object" && value.id !== undefined) return Number(value.id) !== 0
@@ -1131,6 +1171,10 @@ if (typeof module !== "undefined") {
     hidDisplayName: hidDisplayName,
     runtimeDir: runtimeDir,
     parseProgress: parseProgress,
-    reportRateLabel: reportRateLabel
+    reportRateLabel: reportRateLabel,
+    ledZones: ledZones,
+    ledCurrentColor: ledCurrentColor,
+    ledRangeDefault: ledRangeDefault,
+    ledPalette: ledPalette
   }
 }

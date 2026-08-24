@@ -417,6 +417,61 @@ def serialize_setting(setting, live: bool = False) -> dict | None:
         current = value if isinstance(value, dict) else {}
         for key, item in current.items():
             payload["keys"].append({"key": str(key), "label": str(key), "kind": "object", "value": jsonable(item)})
+    elif kind == "hetero":
+        # LED zones and friends: expose the effect menu plus per-effect
+        # parameter metadata so a UI can render pickers without knowing
+        # the feature. The value arrives as an LEDEffectSetting-like
+        # object; hand the UI a plain {ID, color, period, ...} dict.
+        current = {}
+        if hasattr(value, "__dict__"):
+            current = {k: jsonable(v) for k, v in vars(value).items()}
+        elif isinstance(value, dict):
+            current = {k: jsonable(v) for k, v in value.items()}
+        payload["value"] = current
+        pfields = {}
+        for f in getattr(setting, "possible_fields", None) or []:
+            if isinstance(f, dict) and f.get("name") is not None:
+                pfields[str(f["name"])] = f
+
+        def _effect_entry(eff_num: int, label: str) -> dict:
+            item = (getattr(setting, "fields_map", None) or {}).get(eff_num)
+            param_names = item[1] if item and len(item) > 1 and isinstance(item[1], dict) else {}
+            params = []
+            for pname in param_names:
+                f = pfields.get(str(pname))
+                if not f:
+                    continue
+                pk = KIND_NAMES.get(int(f.get("kind", 0) or 0), "choice")
+                entry = {"name": str(pname), "label": str(f.get("label") or pname), "kind": pk}
+                if pk == "range":
+                    try:
+                        entry["min"], entry["max"] = int(f.get("min", 0)), int(f.get("max", 255))
+                    except (TypeError, ValueError):
+                        pass
+                params.append(entry)
+            return {"id": eff_num, "label": label, "params": params}
+
+        effects = []
+        # The ID field's choices are the effects THIS zone actually supports;
+        # fields_map alone lists every effect Solaar knows globally, which
+        # would offer unsupported ones whose writes fail with None lookups.
+        id_field = pfields.get("ID") or {}
+        if id_field.get("choices"):
+            for named in id_field["choices"]:
+                try:
+                    eff_num = int(named)
+                except (TypeError, ValueError):
+                    continue
+                effects.append(_effect_entry(eff_num, str(named)))
+        else:
+            for eff_id, item in (getattr(setting, "fields_map", None) or {}).items():
+                try:
+                    eff_num = int(eff_id)
+                except (TypeError, ValueError):
+                    continue
+                label = str(item[0]) if item else str(eff_num)
+                effects.append(_effect_entry(eff_num, label))
+        payload["effects"] = sorted(effects, key=lambda e: e["id"])
 
     return payload
 
@@ -1183,7 +1238,18 @@ def apply_setting(setting, key, value):
         else:
             result = setting.write_key_value(int(key), value if not isinstance(value, str) else parse_value(value), save=True)
     elif kind == "hetero":
-        result = setting.write(value, save=True)
+        # LED zones take an LEDEffectSetting; the UI sends plain JSON like
+        # {"ID": 1, "color": 16711935}. Build the real object so Solaar's
+        # validator gets something it can serialize.
+        if isinstance(value, dict):
+            from logitech_receiver.hidpp20 import LEDEffectSetting
+
+            kwargs = {}
+            for k, v in value.items():
+                kwargs[str(k)] = parse_value(v) if isinstance(v, str) else v
+            result = setting.write(LEDEffectSetting(**kwargs), save=True)
+        else:
+            result = setting.write(value, save=True)
     else:
         raise ValueError(f"{setting.name}: setting kind '{kind}' is not writable from this plugin")
     if result is None:
