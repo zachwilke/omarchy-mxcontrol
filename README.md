@@ -1,8 +1,10 @@
 # MX Control
 
-**Logi Options+ for the [Omarchy](https://omarchy.org/) bar — plus a full settings window.**
+**Logitech device settings for the [Omarchy](https://omarchy.org/) bar — plus a full settings window.**
 
-A first-class Quattro plugin for Logitech MX mice and keyboards — MX Master, Anywhere, Vertical, Ergo, Lift, MX Keys, and the rest of the family — over Bluetooth, USB-C, Bolt, Unifying, Nano, and Lightspeed.
+A Quattro plugin for Logitech MX mice and keyboards using Solaar’s HID++ support. Available controls depend on the model, firmware, and connection; receiver support does not guarantee support for every attached peripheral.
+
+Inspired by Logi Options+, with partial hardware-settings coverage. Supported HID++ controls now have plugin-owned shortcuts, exact app-specific overrides, directional gestures, and short shortcut sequences on Omarchy’s Lua-based Hyprland. Flow, cloud backup, firmware management, and the full Smart Actions workflow are not implemented. Real-device validation of the new action runtime is still required. See the [feature parity review and roadmap](docs/options-parity-review.md).
 
 It lives inside the long-running `omarchy-shell` process. It never starts a second Quickshell instance.
 
@@ -58,7 +60,7 @@ Left in place on purpose:
 | `solaar` package | Shared system package; other tools may use it |
 | `~/.config/solaar/` | Your saved device profiles |
 | Device onboard settings | DPI, SmartShift, remaps live on the hardware |
-| `~/.config/omarchy-mx/` | Local profiles you saved in the settings window |
+| `~/.config/omarchy-mx/` | Local profiles and software action assignments |
 
 Nothing in `~/.config/hypr/` or the rest of `~/.config/omarchy/` is rewritten except the bar layout entry that `omarchy plugin remove` already owns.
 
@@ -72,7 +74,7 @@ Nothing in `~/.config/hypr/` or the rest of `~/.config/omarchy/` is rewritten ex
 | Escape | Close the popover or settings window |
 | `j` / `k` | Move the popover cursor |
 | Enter | Activate the focused control |
-| `r` | Refresh |
+| `r` in the popover / Ctrl+R in settings | Refresh |
 | **All settings** | Open the full settings window |
 
 ```sh
@@ -92,11 +94,34 @@ omarchy-shell shell hide io.github.zachwilke.mx
 
 ### Settings window
 
-- Button remaps
-- Divert / gesture keys (HID++ divert so Solaar rules can run)
+A sidebar on wide windows and wrapping tabs on smaller windows separate device controls, button/key actions, Easy Switch, local profiles, and Advanced settings. The window follows the active Omarchy theme and lists only controls reported by the device.
+
+![Settings window with labeled button assignments, shown with mock device data](docs/settings-preview.png)
+
+- Hardware button/key remaps, shown as labeled controls
+- Shortcuts and sequences of up to eight shortcuts, with a recorder and common presets
+- App-specific overrides: select an open app or enter its exact Hyprland class
+- Click plus up/down/left/right gestures on controls that expose raw XY reporting
+- Optional external Solaar rule handling remains under **Hardware remaps & Solaar rules**
+- Advanced scalar and keyed settings, including pointer speed and report rate when supported
 - Rename Easy Switch channels (names are stored on the device and show on every computer)
 - Keyboard Fn swap, backlight, platform, disable Caps/Win/Insert
 - Local profiles on this computer (`~/.config/omarchy-mx/profiles.json`) — not Logi cloud, Easy Switch channel is not stored
+
+### Software actions
+
+Open **Buttons & actions** (or **Keys & actions**), choose a control, leave **Application** at **All apps**, and record a shortcut or select a preset. Save it to activate the action. You can then save overrides for individual apps. An All apps action is required so the control remains useful outside those apps; removing it also removes that control’s app overrides.
+
+The recorder handles letters, numbers, F1–F12, and common navigation keys. Other key names, such as `XF86AudioPlay`, can be entered manually.
+
+For sequences, enter one shortcut per line (up to eight), for example `CTRL+c` followed by `CTRL+Tab`. Steps are separated by 60 ms. They target the same window, and execution stops if focus changes. These are application shortcuts, not arbitrary shell commands or compositor bindings.
+
+For gestures, select **Directional gestures** on a supported control. Configure its click action and any of the four directions. An empty direction does nothing. Actions fire on release; a short movement is treated as a click. Motion is captured while a gesture-enabled button is held, including when an app override uses a simple shortcut. Complex multi-segment gestures, configurable delays, and app-launch steps are not implemented.
+
+Assignments live in `~/.config/omarchy-mx/actions.json`, separately from hardware profiles. The helper automatically resumes saved assignments when the plugin loads. It uses Solaar's library and its own notification read handles; the Solaar GUI does not need to run. Controls already diverted to Solaar are rejected: set their rule handling to **Regular** first, and do not run a separate Solaar rule for the same control.
+
+The action runtime uses temporary diversion, verifies the device’s reported flags, and restores regular input when an assignment is removed or the helper exits normally. If the helper is forcibly killed or a device cannot acknowledge restoration, reconnect that device. After a device wakes or reconnects, a heartbeat checks/rearms its controls (up to 60 seconds). The UI reports listener/dispatch failures. Hardware testing across actual device models and transports remains necessary.
+
 
 ## Configure
 
@@ -144,6 +169,9 @@ The panel’s **Install Solaar** button runs that same command in a terminal (`o
 | `python3 mxctl.py write-cmd` | Panel setting changes (writes one `cmd-*.json` per change) | User |
 | `python3 mxctl.py runtime-dir` | Creates the private runtime directory | User |
 | `python3 mxctl.py cleanup` | Plugin unload / remove | User |
+| `hyprctl -j clients` | Populate the application picker when settings opens | User |
+| `hyprctl -j activewindow` | Resolve and verify an action’s target window | User |
+| `hyprctl dispatch hl.dsp.send_shortcut(...)` | Run a user-configured shortcut | User |
 | `omarchy-launch-tui omarchy pkg add solaar` | **Install Solaar** button | User; you confirm the package install |
 | `omarchy-launch-tui sudo bash -lc 'udevadm control --reload-rules && udevadm trigger'` | **Reload udev** button | You type your password in a terminal. Never run automatically. |
 
@@ -161,16 +189,22 @@ The helper talks to `/dev/hidraw*` as your user. Solaar’s udev rules grant tha
 
 ## Develop
 
+Action tests use synthetic HID++ packets, mocked control flags, and mocked Hyprland calls. They never send keys to real applications or change connected hardware.
+
 ```sh
 omarchy plugin validate .
 python3 mxctl.py discover
 python3 mxctl.py cleanup
 python3 -m unittest discover -s test -v
+node test/plain_hid_text.js
+node test/settings_model.js
 ```
 
 Battery: readings come from the kernel's `hidpp_battery_*` power-supply nodes first — the kernel keeps them current from device battery events, so they are fresh at zero HID++ radio cost and work for every connection type, even before the helper ever runs. While the helper is serving it re-checks them on every wake (≤30 s) and publishes on change; the HID++ radio read remains only as a slow fallback for devices the kernel does not cover. Bluetooth devices additionally get the BlueZ battery overlay as a last resort.
 
 Idle cost: the bar path only scans sysfs (no Solaar import, no hidraw open). The manifest declares a `service` entry point, so the shell instantiates **one shared Service** for the whole plugin — every monitor's bar widget and the settings window drive the same helper, device selection, and snapshot. On shells without plugin services, each widget falls back to a local instance (passive except for one active owner). After you open the panel the helper blocks on inotify for spooled `cmd-*.json` files and hidraw plug events; a 60-second heartbeat re-reads only the battery and stamps the snapshot fresh. Initial reads stream: the helper publishes after every HID++ setting read, so the first controls paint while the rest of the burst is still running.
+
+When software actions are configured, independent read handles listen for HID++ button/motion notifications. Assigned controls are checked on the existing heartbeat so they can recover after sleep. With no assignments, these listeners are not started.
 
 Saved files under `~/.config/omarchy/plugins/io.github.zachwilke.mx/` reload automatically. If a change looks stale:
 

@@ -19,4 +19,6 @@ jobs:
       - name: Unit tests
         run: python3 -m unittest discover -s test -v
       - name: Model.js checks
-        run: node test/plain_hid_text.js
+        run: |
+          node test/plain_hid_text.js
+          node test/settings_model.js

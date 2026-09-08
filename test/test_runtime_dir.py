@@ -262,12 +262,10 @@ class RuntimeDirTests(unittest.TestCase):
             window = source[max(0, idx - 120):idx + 900]
             self.assertIn("textFormat: Text.PlainText", window, needle)
 
-        near(settings, 'text: device ? root.hidName(device, "MX Control")')
+        near(settings, 'text: device ? root.hidName(device, "Logitech device")')
         near(settings, "Reading settings")
-        near(settings, "root.divertBoard.familyLabel")
-        near(settings, "root.selectedCapTitle()")
+        near(settings, "text: modelData.label\n                    textFormat:")
         near(settings, 'text: root.hidName(modelData, "Profile")')
-        near(settings, "cap.title || cap.glyph || cap.id")
         near(panel, "return mx.lastError")
         self.assertIn("Model.plainHidText", bar)
         self.assertIn("tooltipText", bar)

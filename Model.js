@@ -84,6 +84,9 @@ function parseStatus(raw) {
       devices: Array.isArray(data.devices) ? data.devices : [],
       adapters: Array.isArray(data.adapters) ? data.adapters : [],
       progress: parseProgress(data.progress),
+      hasActions: data.hasActions === true || (Array.isArray(data.actions) && data.actions.length > 0),
+      actions: Array.isArray(data.actions) ? data.actions : [],
+      actionRuntime: data.actionRuntime || {},
       hasProfiles: Array.isArray(data.profiles),
       profiles: Array.isArray(data.profiles) ? data.profiles : []
     }
@@ -1032,6 +1035,32 @@ function keyRows(setting) {
   return setting.keys
 }
 
+// Merge the controls the device actually exposes; never infer clickable keys
+// from a model name or chassis drawing. Keep remap-only and divert-only keys.
+function assignmentControls(remap, divert) {
+  var result = []
+  var byId = {}
+  function add(setting, role) {
+    var rows = keyRows(setting)
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i]
+      if (!row || row.key === undefined || row.key === null) continue
+      var id = String(row.key)
+      var lookup = "$" + id
+      var control = byId[lookup]
+      if (!control) {
+        control = { key: id, label: String(row.label || "Control " + id), remap: null, divert: null }
+        byId[lookup] = control
+        result.push(control)
+      }
+      control[role] = row
+    }
+  }
+  add(remap, "remap")
+  add(divert, "divert")
+  return result
+}
+
 function optionLabel(option) {
   if (!option) return ""
   if (typeof option === "object") return String(option.label !== undefined ? option.label : option.name || option.value || "")
@@ -1117,6 +1146,7 @@ if (typeof module !== "undefined") {
     batteryLabel: batteryLabel,
     smartShiftState: smartShiftState,
     remainingSettings: remainingSettings,
+    assignmentControls: assignmentControls,
     divertLayout: divertLayout,
     bindKeyLayout: bindKeyLayout,
     mxKeysLayout: mxKeysLayout,

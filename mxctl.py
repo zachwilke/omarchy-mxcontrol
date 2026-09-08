@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import select
+import signal
 import stat
 import sys
 import time
@@ -1198,6 +1199,7 @@ def discover_payload() -> dict:
     return {
         "ok": True,
         "installed": installed,
+        "hasActions": (Path(os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")) / "omarchy-mx" / "actions.json").is_file(),
         "accessible": any(item.get("accessible") for item in visible) or not visible,
         "message": "" if installed else "Solaar is not installed. Install it with `omarchy pkg add solaar`, then reconnect the device.",
         "importError": "" if installed else "logitech_receiver not found",
@@ -1477,7 +1479,7 @@ def sanitize_profile_name(raw) -> str:
 
 def snapshot_settings(mods, dev) -> list[dict]:
     rows = []
-    for setting in load_settings(mods, dev):
+    for setting in load_settings(mods, dev, live=True):
         name = str(setting.get("name") or "")
         if not name or name in PROFILE_SKIP:
             continue
@@ -1556,6 +1558,57 @@ def profile_apply(mods, opened, cmd: dict) -> None:
             continue
         key = row.get("key")
         apply_setting(setting, None if key in ("", None) else key, row.get("value"))
+
+
+def load_actions() -> list[dict]:
+    from mxactions import validate_binding, MAX_BINDINGS
+    path = profiles_dir() / "actions.json"
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return []
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("Action store is not a regular file")
+        raw = os.read(fd, PROFILE_MAX_BYTES + 1)
+    finally:
+        os.close(fd)
+    if len(raw) > PROFILE_MAX_BYTES:
+        raise ValueError("Action store is too large")
+    data = json.loads(raw)
+    if data.get("version") != 1 or not isinstance(data.get("bindings"), list) or len(data["bindings"]) > MAX_BINDINGS:
+        raise ValueError("Unsupported action store")
+    rows = [validate_binding(row) for row in data["bindings"]]
+    keys = {(r["device"], r["control"], r["app"]) for r in rows}
+    if len(keys) != len(rows) or any((r["device"], r["control"], "") not in keys for r in rows):
+        raise ValueError("Each control needs one All apps action and unique app overrides")
+    return rows
+
+
+def action_command(mods, opened, cmd, runtime):
+    from mxactions import updated_bindings
+    old = load_actions()
+    raw = cmd.get("binding") or cmd
+    if str(raw.get("device")) != str(cmd.get("device")):
+        raise ValueError("Assignment device does not match the selected device")
+    new = updated_bindings(old, raw, delete=cmd["op"] == "action-delete")
+    dev = find_device(list(iter_devices(opened)), str(cmd.get("device") or ""))
+    if cmd["op"] == "action-save" and (not dev or not device_is_online(dev)):
+        raise ValueError("Connect this device before saving an assignment")
+    if cmd["op"] == "action-save" and not (getattr(dev, "serial", None) or getattr(dev, "unitId", None)):
+        raise ValueError("This device has no stable identity for saved actions")
+    runtime.error = ""
+    runtime.sync(list(iter_devices(opened)), new)
+    try:
+        if cmd["op"] == "action-save" and device_id(dev) not in runtime.sessions:
+            raise RuntimeError(runtime.error or "Could not start the action listener")
+        if new:
+            write_bytes(profiles_dir() / "actions.json", (json.dumps({"version": 1, "bindings": new}, indent=2) + "\n").encode())
+        else:
+            (profiles_dir() / "actions.json").unlink(missing_ok=True)
+    except Exception:
+        runtime.sync(list(iter_devices(opened)), old)
+        raise
 
 
 def apply_cmd(mods, opened, cmd: dict) -> None:
@@ -1796,6 +1849,7 @@ def serve_command() -> int:
     if lock is None:
         return EXIT_PEER_SERVING
     last_text = [""]
+    actions = None
     runtime_fd = open_inotify(paths, IN_RUNTIME_MASK)
     hidraw_root = Path("/sys/class/hidraw")
     hid_fd = open_inotify(hidraw_root, IN_HIDRAW_MASK) if hidraw_root.is_dir() else None
@@ -1807,6 +1861,8 @@ def serve_command() -> int:
         # by a previous session.
         payload["ts"] = int(time.time())
         payload["profiles"] = load_profiles().get("profiles") or []
+        payload["actions"] = actions.bindings if actions else []
+        payload["actionRuntime"] = actions.status() if actions else {"activeDevices": [], "available": False, "error": ""}
         write_status(status_path, payload, last_text)
 
     hid_devices, adapters = scan_hidraw_with_battery()
@@ -1841,6 +1897,8 @@ def serve_command() -> int:
     starting["progress"] = progress_payload(0, max(len(hid_devices), 1), "Opening devices", "open")
     publish(starting)
     opened, permission_error = open_devices(mods)
+    from mxactions import ActionRuntime
+    actions = ActionRuntime(mods["base"], device_id)
     last_error = ""
     try:
         # Keep hidraw open for the session. Closing it rebinds the Bluetooth
@@ -1855,6 +1913,10 @@ def serve_command() -> int:
             full=True,
             on_partial=publish,
         )
+        try:
+            actions.sync(list(iter_devices(opened)), load_actions())
+        except Exception as exc:
+            actions.report(str(exc))
         payload["lastError"] = last_error
         publish(payload)
         last_heartbeat = time.monotonic()
@@ -1875,6 +1937,7 @@ def serve_command() -> int:
                 if time.monotonic() - last_heartbeat >= HEARTBEAT_SEC:
                     last_heartbeat = time.monotonic()
                     refresh_batteries(opened, payload, skip=covered)
+                    actions.check(list(iter_devices(opened)))
                     payload["lastError"] = last_error
                     publish(payload)
                 elif sysfs_changed:
@@ -1888,7 +1951,17 @@ def serve_command() -> int:
                     opened, permission_error = add_new_devices(mods, opened)
                 for cmd in cmds:
                     try:
-                        apply_cmd(mods, opened, cmd)
+                        if cmd.get("op") in ("action-save", "action-delete"):
+                            action_command(mods, opened, cmd, actions)
+                        else:
+                            # Profiles must capture regular device settings, not our
+                            # temporary diversion flags. Hardware edits also pause
+                            # listeners to avoid simultaneous control writes.
+                            if cmd.get("op") in ("set", "profile-save", "profile-apply"):
+                                if cmd.get("setting") == "divert-keys" and any(r["device"] == cmd.get("device") and r["control"] == str(cmd.get("key")) for r in actions.bindings):
+                                    raise ValueError("Remove this control's software assignment before changing Solaar rule handling")
+                                actions.close()
+                            apply_cmd(mods, opened, cmd)
                         last_error = ""
                     except Exception as exc:
                         last_error = plain_hid_text(friendly_error(exc))
@@ -1922,12 +1995,15 @@ def serve_command() -> int:
                 topology = next_topology
             except Exception as exc:
                 last_error = plain_hid_text(str(exc))
+            actions.sync(list(iter_devices(opened)), actions.bindings)
             payload["lastError"] = last_error
             publish(payload)
             last_heartbeat = time.monotonic()
     except KeyboardInterrupt:
         pass
     finally:
+        if actions:
+            actions.close()
         close_inotify(runtime_fd, hid_fd)
         close_all(mods)
         if lock:
@@ -1947,6 +2023,9 @@ def main() -> None:
     if action == "runtime-dir":
         runtime_dir_command()
     if action == "serve":
+        def terminate(_signum, _frame):
+            raise KeyboardInterrupt
+        signal.signal(signal.SIGTERM, terminate)
         raise SystemExit(serve_command())
     if action in ("status", "show", "list"):
         status_command()

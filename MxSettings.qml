@@ -14,8 +14,18 @@ Item {
   property var service: null
   property bool closingFromHost: false
   property bool dropdownOpen: false
-  property string profileDraft: ""
-  property string selectedDivertId: ""
+  property string section: "device"
+  property bool showHardware: false
+  readonly property bool wideLayout: window.width >= Style.space(900)
+  readonly property var navigation: [
+    { key: "device", label: Model.isKeyboard(device) ? "Keyboard" : "Point & scroll", detail: Model.isKeyboard(device) ? "Function keys and backlighting" : "Sensitivity and wheel behavior" },
+    { key: "buttons", label: Model.isKeyboard(device) ? "Keys & actions" : "Buttons & actions", detail: "Shortcuts for the way you work" },
+    { key: "hosts", label: "Easy Switch", detail: "Your paired computers" },
+    { key: "profiles", label: "Profiles", detail: "Save and restore device settings" },
+    { key: "advanced", label: "Advanced", detail: "Additional device controls" }
+  ]
+  readonly property var currentPage: navigation.filter(function(n) { return n.key === root.section })[0]
+  onSectionChanged: flick.contentY = 0
 
   function resolveService() {
     if (service || !shell) return
@@ -32,6 +42,7 @@ Item {
     if (mx) {
       mx.ensureDaemon()
       mx.refresh()
+      if (typeof mx.refreshApplications === "function") mx.refreshApplications()
       if (payloadJson) {
         try {
           var parsed = JSON.parse(String(payloadJson))
@@ -57,7 +68,7 @@ Item {
   readonly property color background: Color.background
   readonly property color accent: Color.accent
   readonly property color urgent: Color.urgent
-  readonly property color dim: Qt.darker(foreground, 1.55)
+  readonly property color dim: Qt.alpha(foreground, 0.68)
   readonly property string fontFamily: Style.font.family
   readonly property var fakeBar: QtObject {
     readonly property color foreground: root.foreground
@@ -80,10 +91,8 @@ Item {
   readonly property var mx: root.service || localMx
 
   readonly property var device: mx.selectedDevice
-  onDeviceChanged: selectedDivertId = ""
   readonly property bool canWrite: mx.hidppReady
   readonly property var dpiSetting: Model.settingByNames(device, ["dpi", "dpi-extended", "dpi_extended"])
-  readonly property var pointerSetting: Model.settingByNames(device, ["pointer_speed", "pointer-speed"])
   readonly property var smartSetting: Model.settingByNames(device, ["scroll-ratchet", "smartshift"])
   readonly property var smartThresholdSetting: Model.settingByNames(device, ["smart-shift", "smartshift"])
   readonly property var invertSetting: Model.settingByNames(device, ["hires-smooth-invert", "scroll-invert"])
@@ -93,28 +102,12 @@ Item {
   readonly property var hostSetting: Model.settingByNames(device, ["change-host", "change_host"])
   readonly property var remapSetting: Model.settingByNames(device, ["reprogrammable-keys"])
   readonly property var divertSetting: Model.settingByNames(device, ["divert-keys"])
-  readonly property var reportSetting: Model.settingByNames(device, ["report_rate", "report-rate", "report_rate_extended"])
   readonly property var fnSetting: Model.settingByNames(device, ["fn-swap", "fn_swap"])
   readonly property var backlightSetting: Model.settingByNames(device, ["backlight", "backlight_level", "backlight-level"])
   readonly property var platformSetting: Model.settingByNames(device, ["multiplatform"])
   readonly property var lockSetting: Model.settingByNames(device, ["disable-keyboard-keys"])
   readonly property var extraSettings: Model.remainingSettings(device, usedSettingNames())
-  readonly property var divertBoard: bindDivertBoard(device, divertSetting, remapSetting)
-  readonly property bool mouseView: !!(divertBoard && divertBoard.view === "mouse")
-  readonly property var selectedDivertRow: {
-    var keys = divertSetting && divertSetting.keys ? divertSetting.keys : []
-    for (var i = 0; i < keys.length; i++) {
-      if (String(keys[i].key) === String(root.selectedDivertId)) return keys[i]
-    }
-    return null
-  }
-  readonly property var selectedRemapRow: {
-    var keys = remapSetting && remapSetting.keys ? remapSetting.keys : []
-    for (var i = 0; i < keys.length; i++) {
-      if (String(keys[i].key) === String(root.selectedDivertId)) return keys[i]
-    }
-    return null
-  }
+  readonly property var assignmentControls: Model.assignmentControls(remapSetting, divertSetting)
   readonly property var smartState: Model.smartShiftState(smartSetting)
   readonly property var hostOptions: Model.hostOptions(device)
   readonly property var deviceProfiles: {
@@ -133,44 +126,20 @@ Item {
   function usedSettingNames() {
     var names = []
     function add(setting) { if (setting && setting.name) names.push(setting.name) }
-    add(dpiSetting); add(pointerSetting); add(smartSetting); add(smartThresholdSetting)
-    add(invertSetting); add(hiresSetting); add(thumbInvertSetting); add(thumbModeSetting)
-    add(hostSetting); add(remapSetting); add(divertSetting); add(reportSetting)
-    add(fnSetting); add(backlightSetting); add(platformSetting); add(lockSetting)
+    add(dpiSetting)
+    add(smartSetting)
+    // smartshift can be a range that also supplies the on/off control.
+    if (smartThresholdSetting && smartThresholdSetting.kind === "range") add(smartThresholdSetting)
+    if (invertSetting && invertSetting.kind === "toggle") add(invertSetting)
+    if (hiresSetting && hiresSetting.kind === "toggle") add(hiresSetting)
+    if (thumbInvertSetting && thumbInvertSetting.kind === "toggle") add(thumbInvertSetting)
+    if (thumbModeSetting && thumbModeSetting.kind === "toggle") add(thumbModeSetting)
+    add(hostSetting); add(remapSetting); add(divertSetting)
+    if (fnSetting && fnSetting.kind === "toggle") add(fnSetting)
+    if (backlightSetting && (backlightSetting.kind === "range" || backlightSetting.kind === "choice")) add(backlightSetting)
+    if (platformSetting && platformSetting.kind === "choice") add(platformSetting)
+    add(lockSetting)
     return names
-  }
-
-  function cap(id, glyph, title, span) {
-    return { id: String(id), glyph: glyph, title: title, span: span || 1, decorative: false, spacer: false }
-  }
-  function dead(glyph, span) {
-    return { id: "", glyph: glyph || "", title: "", span: span || 1, decorative: true, spacer: false }
-  }
-  function gap(span) {
-    return { id: "", glyph: "", title: "", span: span || 1, decorative: true, spacer: true }
-  }
-  function bindDivertBoard(dev, setting, remap) {
-    if (typeof Model.divertLayout === "function") {
-      try { return Model.divertLayout(dev, setting, remap) } catch (e) {}
-    }
-    return null
-  }
-
-  function selectedCapTitle() {
-    var id = String(root.selectedDivertId || "")
-    if (!id || !root.divertBoard) return ""
-    var rows = root.divertBoard.rows || []
-    for (var r = 0; r < rows.length; r++) {
-      var row = rows[r] || []
-      for (var c = 0; c < row.length; c++) {
-        if (row[c] && String(row[c].id) === id && row[c].title) return String(row[c].title)
-      }
-    }
-    var spots = root.divertBoard.spots || []
-    for (var i = 0; i < spots.length; i++) {
-      if (spots[i] && String(spots[i].id) === id && spots[i].title) return String(spots[i].title)
-    }
-    return ""
   }
 
   function hidName(item, fallback) {
@@ -215,10 +184,10 @@ Item {
     id: window
     title: "MX Control"
     color: root.background
-    implicitWidth: 760
-    implicitHeight: 780
+    implicitWidth: 1100
+    implicitHeight: 820
     minimumSize: Qt.size(560, 520)
-    maximumSize: Qt.size(880, 980)
+    maximumSize: Qt.size(1400, 1200)
 
     onVisibleChanged: {
       if (!visible && !root.closingFromHost && root.shell && typeof root.shell.hide === "function")
@@ -229,19 +198,149 @@ Item {
       anchors.fill: parent
       focus: true
 
-      PanelKeyCatcher {
+      FocusScope {
         id: keyCatcher
         anchors.fill: parent
-        blocked: root.dropdownOpen
-        onCloseRequested: root.requestClose()
-        onTextKey: function(t) {
-          if (t === "r" || t === "R") mx.refresh(true)
+        focus: true
+        Keys.onPressed: function(event) {
+          if (root.dropdownOpen) return
+          if (event.key === Qt.Key_Escape) {
+            root.requestClose()
+            event.accepted = true
+          } else if (event.key === Qt.Key_R && (event.modifiers & Qt.ControlModifier)) {
+            mx.refresh(true)
+            event.accepted = true
+          }
+        }
+
+        Rectangle {
+          visible: root.wideLayout
+          anchors.left: parent.left
+          anchors.top: parent.top
+          anchors.bottom: parent.bottom
+          width: Style.space(212)
+          color: Qt.alpha(root.foreground, 0.025)
+          Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: Qt.alpha(root.foreground, 0.08) }
+          Column {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(20)
+            spacing: Style.space(28)
+            Column {
+              spacing: Style.space(6)
+              Text { text: "MX Control"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.subtitle; font.bold: true }
+              Text { text: "Your devices. Your way."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+            }
+            Column {
+              width: parent.width
+              spacing: Style.space(8)
+              Repeater {
+                model: root.navigation
+                Button {
+                  required property var modelData
+                  width: parent.width
+                  text: modelData.label
+                  leftAlign: true
+                  verticalPadding: Style.space(12)
+                  selected: root.section === modelData.key
+                  bordered: selected
+                  focusable: true
+                  onClicked: root.section = modelData.key
+                }
+              }
+            }
+          }
+        }
+
+        Column {
+          id: header
+          anchors.top: parent.top
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.margins: Style.space(28)
+          anchors.leftMargin: root.wideLayout ? Style.space(240) : Style.space(28)
+          spacing: Style.space(16)
+
+          Row {
+            width: parent.width
+            spacing: Style.space(12)
+            Column {
+              width: parent.width - refreshButton.width - parent.spacing
+              spacing: Style.space(4)
+              Text {
+                text: "DEVICE SETTINGS"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              Text {
+                width: parent.width
+                text: device ? root.hidName(device, "Logitech device") : "Your Logitech devices"
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.subtitle * 1.5
+                font.bold: true
+              }
+              Text {
+                width: parent.width
+                text: device ? [Model.connectionLabel(device), Model.batteryLabel(device)].filter(function(v) { return !!v }).join("  ·  ") : "Connect a mouse or keyboard to get started."
+                textFormat: Text.PlainText
+                color: mx.batteryLow ? root.urgent : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+            }
+            Button {
+              id: refreshButton
+              text: "Refresh"
+              bordered: true
+              focusable: true
+              anchors.verticalCenter: parent.verticalCenter
+              onClicked: mx.refresh(true)
+            }
+          }
+
+          Dropdown {
+            visible: mx.displayDevices.length > 1
+            width: parent.width
+            showLabel: false
+            value: device ? String(device.id) : ""
+            options: mx.displayDevices.filter(function(d) { return !!d }).map(function(d) { return { value: String(d.id), label: root.hidName(d, "Device") } })
+            onChanged: function(value) { mx.selectDevice(value) }
+            onPopupOpenChanged: root.dropdownOpen = popupOpen
+          }
+
+          Flow {
+            visible: !root.wideLayout
+            width: parent.width
+            spacing: Style.space(6)
+            Repeater {
+              model: root.navigation
+              Button {
+                required property var modelData
+                text: modelData.label
+                selected: root.section === modelData.key
+                bordered: selected
+                focusable: true
+                onClicked: root.section = modelData.key
+              }
+            }
+          }
         }
 
         Flickable {
           id: flick
-          anchors.fill: parent
-          anchors.margins: Style.space(18)
+          anchors.top: header.bottom
+          anchors.bottom: parent.bottom
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.margins: Style.space(24)
+          anchors.topMargin: Style.space(24)
+          anchors.leftMargin: root.wideLayout ? Style.space(240) : Style.space(28)
           contentWidth: width
           contentHeight: column.implicitHeight
           clip: true
@@ -251,46 +350,27 @@ Item {
 
           Column {
             id: column
-            width: flick.width
-            spacing: Style.space(14)
+            width: flick.width - Style.space(12)
+            spacing: Style.space(16)
 
-            Row {
+            Column {
               width: parent.width
-              spacing: Style.space(12)
-              MxIcon {
-                iconSize: Style.font.display
-                color: mx.batteryLow ? root.urgent : root.foreground
-                cutoutColor: root.background
-                lowBattery: mx.batteryLow
-                badgeColor: root.urgent
-                anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(6)
+              Text {
+                width: parent.width
+                text: root.currentPage.label
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.subtitle * 1.35
+                font.bold: true
               }
-              Column {
-                spacing: Style.space(2)
-                width: parent.width - Style.font.display - parent.spacing
-                Text {
-                  text: device ? root.hidName(device, "MX Control") : "MX Control"
-                  textFormat: Text.PlainText
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.subtitle
-                  font.bold: true
-                }
-                Text {
-                  text: {
-                    var parts = []
-                    var battery = Model.batteryLabel(device)
-                    if (battery) parts.push(battery)
-                    var link = Model.connectionLabel(device)
-                    if (link) parts.push(link)
-                    parts.push("All settings")
-                    return parts.join(" · ")
-                  }
-                  textFormat: Text.PlainText
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
+              Text {
+                width: parent.width
+                text: root.currentPage.detail
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.WordWrap
               }
             }
 
@@ -305,29 +385,14 @@ Item {
               wrapMode: Text.WordWrap
             }
 
-            Flow {
-              width: parent.width
-              spacing: Style.space(6)
-              Repeater {
-                model: mx.displayDevices
-                Button {
-                  required property var modelData
-                  text: root.hidName(modelData, "Device") + (modelData.connection ? (" · " + Model.connectionLabel(modelData)) : "")
-                  bordered: true
-                  selected: device && String(device.id) === String(modelData.id)
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  onClicked: mx.selectDevice(modelData.id)
-                }
-              }
-            }
-
             Text {
               visible: !root.canWrite
               width: parent.width
-              text: mx.daemonWanted
-                ? ("Reading settings" + (mx.progressLabel ? (" · " + mx.progressLabel) : "") + " · " + mx.readPercent + "%")
-                : "Open the bar icon once if settings do not appear."
+              text: !mx.installed ? "Install Solaar to configure your devices: omarchy pkg add solaar"
+                : !device ? "No supported device found. Connect your device, then refresh."
+                : device.online === false ? "This device is offline. Wake it or reconnect, then refresh."
+                : !mx.accessible ? "Waiting for device access. After installing Solaar, reconnect your device so its access rules apply."
+                : "Reading settings" + (mx.progressLabel ? (" · " + mx.progressLabel) : "") + " · " + mx.readPercent + "%"
               textFormat: Text.PlainText
               color: root.dim
               font.family: root.fontFamily
@@ -335,12 +400,10 @@ Item {
               wrapMode: Text.WordWrap
             }
 
-            Column {
-              visible: !!dpiSetting && root.canWrite
+            SectionCard {
+              visible: root.section === "device" && (!!dpiSetting && root.canWrite)
               width: parent.width
-              spacing: Style.space(8)
-              PanelSeparator { foreground: root.foreground }
-              PanelSectionHeader { text: "POINTER"; foreground: root.foreground; fontFamily: root.fontFamily }
+              title: "Pointer"
               SliderBlock {
                 visible: !!dpiSetting
                 width: parent.width
@@ -362,12 +425,10 @@ Item {
               }
             }
 
-            Column {
-              visible: !!(smartSetting || invertSetting || hiresSetting) && root.canWrite
+            SectionCard {
+              visible: root.section === "device" && (!!(smartSetting || smartThresholdSetting || invertSetting || hiresSetting) && root.canWrite)
               width: parent.width
-              spacing: Style.space(8)
-              PanelSeparator { foreground: root.foreground }
-              PanelSectionHeader { text: "SCROLL"; foreground: root.foreground; fontFamily: root.fontFamily }
+              title: "Scrolling"
               HintedToggle {
                 visible: !!smartSetting
                 width: parent.width
@@ -402,12 +463,10 @@ Item {
               }
             }
 
-            Column {
-              visible: !!(thumbInvertSetting || thumbModeSetting) && root.canWrite
+            SectionCard {
+              visible: root.section === "device" && (!!(thumbInvertSetting || thumbModeSetting) && root.canWrite)
               width: parent.width
-              spacing: Style.space(8)
-              PanelSeparator { foreground: root.foreground }
-              PanelSectionHeader { text: "THUMB WHEEL"; foreground: root.foreground; fontFamily: root.fontFamily }
+              title: "Thumb wheel"
               HintedToggle {
                 visible: !!thumbInvertSetting
                 width: parent.width
@@ -426,12 +485,10 @@ Item {
               }
             }
 
-            Column {
-              visible: !!(hostSetting || (device && device.hosts && device.hosts.length)) && root.canWrite
+            SectionCard {
+              visible: root.section === "hosts" && (!!(hostSetting || (device && device.hosts && device.hosts.length)) && root.canWrite)
               width: parent.width
-              spacing: Style.space(8)
-              PanelSeparator { foreground: root.foreground }
-              PanelSectionHeader { text: "EASY SWITCH"; foreground: root.foreground; fontFamily: root.fontFamily }
+              title: "Easy Switch"
               ButtonGroup {
                 width: parent.width
                 options: root.hostOptions
@@ -456,7 +513,7 @@ Item {
                 Row {
                   id: hostRow
                   required property var modelData
-                  width: column.width
+                  width: parent.width
                   spacing: Style.space(8)
                   Text {
                     id: hostNum
@@ -483,6 +540,7 @@ Item {
                     id: hostRenameBtn
                     text: "Rename"
                     bordered: true
+                    focusable: true
                     foreground: root.foreground
                     fontFamily: root.fontFamily
                     onClicked: {
@@ -494,129 +552,82 @@ Item {
               }
             }
 
-            Column {
-              visible: !!(remapSetting && remapSetting.keys && remapSetting.keys.length) && root.canWrite && !root.mouseView
+            SectionCard {
+              visible: root.section === "buttons" && root.canWrite
               width: parent.width
-              spacing: Style.space(8)
-              PanelSeparator { foreground: root.foreground }
-              PanelSectionHeader { text: "BUTTON REMAPS"; foreground: root.foreground; fontFamily: root.fontFamily }
-              Text {
+              ActionEditor {
                 width: parent.width
-                text: "The first action in each list is the factory default."
+                service: root.mx
+                device: root.device
+                controls: root.assignmentControls
+              }
+            }
+            Button {
+              visible: root.section === "buttons" && root.canWrite
+              text: root.showHardware ? "Hide hardware controls" : "Hardware remaps & Solaar rules"
+              focusable: true
+              bordered: true
+              onClicked: root.showHardware = !root.showHardware
+            }
+
+            SectionCard {
+              visible: root.section === "buttons" && root.canWrite && root.showHardware
+              width: parent.width
+              title: Model.isKeyboard(device) ? "Key assignments" : "Button assignments"
+              description: "Hardware remaps apply across all apps. Solaar rule handling is for external Solaar rules; leave it Regular when using assignments above."
+              Text {
+                visible: root.assignmentControls.length === 0
+                width: parent.width
+                text: "This device does not expose configurable buttons or keys."
                 color: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                font.pixelSize: Style.font.bodySmall
                 wrapMode: Text.WordWrap
               }
               Repeater {
-                model: remapSetting && remapSetting.keys ? remapSetting.keys : []
-                MapRow {
+                model: root.assignmentControls
+                Column {
                   required property var modelData
-                  width: column.width
-                  row: modelData
-                  setting: root.remapSetting
-                }
-              }
-            }
-
-            Column {
-              visible: (!!(divertSetting && divertSetting.keys && divertSetting.keys.length) || root.mouseView) && root.canWrite
-              width: parent.width
-              spacing: Style.space(8)
-              PanelSeparator { foreground: root.foreground }
-              PanelSectionHeader {
-                text: root.mouseView ? "BUTTONS" : "KEYS"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-              }
-              Text {
-                width: parent.width
-                text: root.divertBoard
-                  ? ((root.divertBoard.familyLabel ? root.divertBoard.familyLabel + ". " : "") + (root.mouseView
-                    ? "Click a lit control to remap it or send it to HID++. Dim controls are not on this model."
-                    : "F1–F12 are the function row. The small label is the default action; Fn swap changes whether you need Fn to get a real F-key. Grey keys are just the chassis."))
-                  : "Regular is a normal click. Divert sends HID++ so Solaar rules can handle the press."
-                textFormat: Text.PlainText
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.WordWrap
-              }
-              Item {
-                visible: !!root.divertBoard && !root.mouseView
-                width: parent.width
-                height: keyBoard.height
-                KeyBoard {
-                  id: keyBoard
-                  anchors.horizontalCenter: parent.horizontalCenter
-                  width: Math.min(parent.width, root.divertBoard && root.divertBoard.compact ? 620 : 740)
-                  layout: root.divertBoard
-                }
-              }
-              Item {
-                visible: root.mouseView
-                width: parent.width
-                height: mouseBoard.height
-                MouseBoard {
-                  id: mouseBoard
-                  anchors.horizontalCenter: parent.horizontalCenter
-                  width: Math.min(parent.width * 0.56, 340)
-                  layout: root.divertBoard
-                }
-              }
-              Column {
-                visible: !!(root.selectedDivertRow || root.selectedRemapRow) && !!root.divertBoard
-                width: parent.width
-                spacing: Style.space(6)
-                Text {
-                  text: root.hidName({
-                    name: root.selectedCapTitle()
-                      || (root.selectedDivertRow && root.selectedDivertRow.label)
-                      || (root.selectedRemapRow && root.selectedRemapRow.label)
-                  }, "Control")
-                  textFormat: Text.PlainText
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                  font.bold: true
-                }
-                MapRow {
-                  visible: !!root.selectedRemapRow && root.mouseView
                   width: parent.width
-                  row: root.selectedRemapRow
-                  setting: root.remapSetting
-                }
-                ButtonGroup {
-                  visible: !!root.selectedDivertRow
-                  width: parent.width
-                  options: root.rowOptions(root.selectedDivertRow)
-                  value: root.rowValue(root.selectedDivertRow)
-                  foreground: root.foreground
-                  accent: root.accent
-                  fontFamily: root.fontFamily
-                  onChanged: function(value) {
-                    if (root.divertSetting && root.selectedDivertRow)
-                      root.writeSetting(root.divertSetting, value, root.selectedDivertRow.key)
+                  spacing: Style.space(10)
+                  Text {
+                    width: parent.width
+                    text: modelData.label
+                    textFormat: Text.PlainText
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                    wrapMode: Text.WordWrap
                   }
+                  Flow {
+                    width: parent.width
+                    spacing: Style.space(12)
+                    MapRow {
+                      visible: !!modelData.remap
+                      width: parent.width < Style.space(560) || !modelData.divert ? parent.width : (parent.width - parent.spacing) / 2
+                      row: modelData.remap
+                      setting: root.remapSetting
+                      label: "Hardware action"
+                    }
+                    MapRow {
+                      visible: !!modelData.divert
+                      width: parent.width < Style.space(560) || !modelData.remap ? parent.width : (parent.width - parent.spacing) / 2
+                      row: modelData.divert
+                      setting: root.divertSetting
+                      label: "Solaar rule handling"
+                    }
+                  }
+                  PanelSeparator { foreground: root.foreground }
                 }
               }
-              Repeater {
-                model: root.divertBoard ? [] : (divertSetting && divertSetting.keys ? divertSetting.keys : [])
-                MapRow {
-                  required property var modelData
-                  width: column.width
-                  row: modelData
-                  setting: root.divertSetting
-                }
-              }
+
             }
 
-            Column {
-              visible: !!(fnSetting || backlightSetting || platformSetting || lockSetting) && root.canWrite
+            SectionCard {
+              visible: root.section === "device" && (!!(fnSetting || backlightSetting || platformSetting || lockSetting) && root.canWrite)
               width: parent.width
-              spacing: Style.space(8)
-              PanelSeparator { foreground: root.foreground }
-              PanelSectionHeader { text: "KEYBOARD"; foreground: root.foreground; fontFamily: root.fontFamily }
+              title: "Keyboard"
               HintedToggle {
                 visible: !!fnSetting && fnSetting.kind === "toggle"
                 width: parent.width
@@ -647,7 +658,7 @@ Item {
                 model: lockSetting && lockSetting.keys ? lockSetting.keys : []
                 HintedToggle {
                   required property var modelData
-                  width: column.width
+                  width: parent.width
                   visible: true
                   label: "Disable " + (modelData && modelData.label ? modelData.label : "key")
                   info: Model.helpForSetting(root.lockSetting, "Stops this key from sending its usual scancode.")
@@ -657,15 +668,13 @@ Item {
               }
             }
 
-            Column {
-              visible: root.canWrite
+            SectionCard {
+              visible: root.section === "profiles" && (root.canWrite)
               width: parent.width
-              spacing: Style.space(8)
-              PanelSeparator { foreground: root.foreground }
-              PanelSectionHeader { text: "PROFILES"; foreground: root.foreground; fontFamily: root.fontFamily }
+              title: "Local profiles"
               Text {
                 width: parent.width
-                text: "Snapshots of this device’s onboard settings on this computer. Easy Switch channel is not stored. Not Logi cloud profiles."
+                text: "Save this device’s current settings and apply them later. Profiles stay on this computer and exclude the Easy Switch channel."
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -677,7 +686,7 @@ Item {
                 TextField {
                   id: profileField
                   width: parent.width - saveBtn.implicitWidth - parent.spacing
-                  placeholderText: "Desk"
+                  placeholderText: "Profile name, e.g. Work"
                   font.family: root.fontFamily
                   onAccepted: {
                     mx.saveProfile(text)
@@ -688,6 +697,7 @@ Item {
                   id: saveBtn
                   text: "Save"
                   bordered: true
+                  focusable: true
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   onClicked: {
@@ -700,7 +710,7 @@ Item {
                 model: root.deviceProfiles
                 Row {
                   required property var modelData
-                  width: column.width
+                  width: parent.width
                   spacing: Style.space(8)
                   Text {
                     text: root.hidName(modelData, "Profile")
@@ -716,6 +726,7 @@ Item {
                     id: applyBtn
                     text: "Apply"
                     bordered: true
+                    focusable: true
                     foreground: root.foreground
                     fontFamily: root.fontFamily
                     onClicked: mx.applyProfile(modelData.name)
@@ -724,6 +735,7 @@ Item {
                     id: delBtn
                     text: "Delete"
                     bordered: true
+                    focusable: true
                     foreground: root.foreground
                     fontFamily: root.fontFamily
                     onClicked: mx.deleteProfile(modelData.name)
@@ -739,23 +751,79 @@ Item {
               }
             }
 
-            Column {
-              visible: extraSettings.length > 0 && root.canWrite
+            Text {
+              visible: root.canWrite && ((root.section === "hosts" && !hostSetting && !(device && device.hosts && device.hosts.length))
+                || (root.section === "advanced" && extraSettings.length === 0)
+                || (root.section === "device" && !(dpiSetting || smartSetting || smartThresholdSetting || invertSetting || hiresSetting || thumbInvertSetting || thumbModeSetting || fnSetting || backlightSetting || platformSetting || lockSetting)))
               width: parent.width
-              spacing: Style.space(8)
-              PanelSeparator { foreground: root.foreground }
-              PanelSectionHeader { text: "MORE"; foreground: root.foreground; fontFamily: root.fontFamily }
+              text: root.section === "hosts" ? "This device does not expose Easy Switch controls."
+                : root.section === "advanced" ? "No additional settings are exposed by this device."
+                : "Use the other tabs to configure the settings this device exposes."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            SectionCard {
+              visible: root.section === "advanced" && (extraSettings.length > 0 && root.canWrite)
+              width: parent.width
+              title: "Advanced settings"
               Repeater {
                 model: extraSettings
                 ExtraBlock {
                   required property var modelData
-                  width: column.width
+                  width: parent.width
                   setting: modelData
                 }
               }
             }
           }
         }
+      }
+    }
+  }
+
+  component SectionCard: Rectangle {
+    id: card
+    property string title: ""
+    property string description: ""
+    default property alias contents: cardContent.data
+    implicitHeight: cardLayout.implicitHeight + Style.space(36)
+    color: Qt.alpha(root.foreground, 0.025)
+    border.color: Qt.alpha(root.foreground, 0.10)
+    border.width: 1
+    radius: Style.cornerRadius
+    data: Column {
+      id: cardLayout
+      x: Style.space(18)
+      y: Style.space(18)
+      width: parent.width - Style.space(36)
+      spacing: Style.space(16)
+      Text {
+        width: parent.width
+        visible: card.title !== ""
+        text: card.title
+        textFormat: Text.PlainText
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+        wrapMode: Text.WordWrap
+      }
+      Text {
+        visible: card.description !== ""
+        width: parent.width
+        text: card.description
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        wrapMode: Text.WordWrap
+      }
+      Column {
+        id: cardContent
+        width: parent.width
+        spacing: Style.space(14)
       }
     }
   }
@@ -825,6 +893,7 @@ Item {
     property string info: ""
     property var setting: null
     property var formatValue: null
+    property var settingKey: undefined
     property string liveSubtitle: ""
     readonly property var bounds: Model.sliderBounds(setting)
     function displayFor(value) {
@@ -837,6 +906,7 @@ Item {
       spacing: Style.space(8)
       Text {
         text: sliderBlock.title
+        textFormat: Text.PlainText
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
@@ -869,268 +939,7 @@ Item {
       }
       onReleased: function(next) {
         sliderBlock.liveSubtitle = ""
-        if (sliderBlock.setting) root.writeSetting(sliderBlock.setting, Model.snapToChoices(sliderBlock.setting, next))
-      }
-    }
-  }
-
-  component KeyBoard: Column {
-    id: board
-    property var layout: null
-    spacing: Style.space(4)
-    readonly property var rows: layout && layout.rows ? layout.rows : []
-
-    Repeater {
-      model: board.rows.length
-      Row {
-        id: keyRow
-        required property int index
-        width: board.width
-        spacing: Style.space(3)
-        readonly property var caps: board.rows[index] || []
-        readonly property real spanTotal: {
-          var n = 0
-          var list = keyRow.caps
-          for (var i = 0; i < list.length; i++) n += Number(list[i].span || 1)
-          return Math.max(1, n)
-        }
-        readonly property real unit: Math.max(8, (width - Math.max(0, caps.length - 1) * spacing) / spanTotal)
-
-        Repeater {
-          model: keyRow.caps.length
-          Item {
-            required property int index
-            readonly property var cap: keyRow.caps[index] || ({})
-            width: keyRow.unit * Number(cap.span || 1)
-            height: cap.spacer ? 1 : Style.space(cap.decorative ? 26 : (cap.hint ? 42 : 34))
-
-            BorderSurface {
-              visible: !cap.spacer
-              anchors.fill: parent
-              radius: Style.cornerRadius
-              color: {
-                if (cap.decorative) return Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.04)
-                if (String(cap.id) === String(root.selectedDivertId))
-                  return Style.hoverFillFor(root.foreground, root.accent)
-                if (cap.row && Number(cap.row.value) !== 0)
-                  return Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.28)
-                return Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.10)
-              }
-              borderSpec: Border.controlSpec(
-                String(cap.id) === String(root.selectedDivertId) ? "hover-cursor" : "normal",
-                root.foreground,
-                root.accent
-              )
-
-              Column {
-                anchors.centerIn: parent
-                spacing: 0
-                Text {
-                  anchors.horizontalCenter: parent.horizontalCenter
-                  text: cap.glyph || ""
-                  color: cap.decorative ? root.dim : root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: cap.hint ? Style.font.body : Style.font.caption
-                  font.bold: !!cap.hint
-                  opacity: cap.decorative ? 0.45 : 1
-                }
-                Text {
-                  visible: !!cap.hint
-                  anchors.horizontalCenter: parent.horizontalCenter
-                  text: cap.hint || ""
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  opacity: 0.7
-                }
-              }
-
-              MouseArea {
-                anchors.fill: parent
-                enabled: !!cap.row
-                hoverEnabled: true
-                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                onClicked: root.selectedDivertId = String(cap.id)
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  component MouseBoard: Column {
-    id: mouseBoardRoot
-    property var layout: null
-    spacing: Style.space(8)
-    readonly property var spots: layout && layout.spots ? layout.spots : []
-    readonly property var extras: layout && layout.extras ? layout.extras : []
-    readonly property real aspect: layout && layout.aspect ? Number(layout.aspect) : 1.3
-    readonly property string hull: layout && layout.hull ? String(layout.hull) : "master"
-
-    Item {
-      id: stage
-      width: mouseBoardRoot.width
-      height: width * mouseBoardRoot.aspect
-
-      Canvas {
-        id: hullCanvas
-        anchors.fill: parent
-        property color fillColor: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
-        property color strokeColor: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.22)
-        property string kind: mouseBoardRoot.hull
-        onFillColorChanged: requestPaint()
-        onStrokeColorChanged: requestPaint()
-        onKindChanged: requestPaint()
-        onWidthChanged: requestPaint()
-        onHeightChanged: requestPaint()
-
-        function strokeFill(ctx) {
-          ctx.fillStyle = fillColor
-          ctx.strokeStyle = strokeColor
-          ctx.lineWidth = Math.max(1.2, width * 0.012)
-          ctx.fill()
-          ctx.stroke()
-        }
-
-        onPaint: {
-          var ctx = getContext("2d")
-          var w = width
-          var h = height
-          if (w < 8 || h < 8) return
-          ctx.reset()
-          ctx.lineJoin = "round"
-          ctx.lineCap = "round"
-          ctx.beginPath()
-          if (kind === "vertical") {
-            ctx.moveTo(w * 0.78, h * 0.04)
-            ctx.quadraticCurveTo(w * 0.96, h * 0.08, w * 0.94, h * 0.28)
-            ctx.quadraticCurveTo(w * 0.92, h * 0.62, w * 0.82, h * 0.92)
-            ctx.quadraticCurveTo(w * 0.62, h * 0.99, w * 0.42, h * 0.90)
-            ctx.quadraticCurveTo(w * 0.22, h * 0.70, w * 0.16, h * 0.48)
-            ctx.quadraticCurveTo(w * 0.14, h * 0.22, w * 0.42, h * 0.06)
-            ctx.quadraticCurveTo(w * 0.60, h * 0.02, w * 0.78, h * 0.04)
-          } else if (kind === "ergo") {
-            ctx.moveTo(w * 0.18, h * 0.18)
-            ctx.quadraticCurveTo(w * 0.50, h * 0.02, w * 0.82, h * 0.18)
-            ctx.quadraticCurveTo(w * 0.98, h * 0.50, w * 0.82, h * 0.84)
-            ctx.quadraticCurveTo(w * 0.50, h * 0.98, w * 0.18, h * 0.84)
-            ctx.quadraticCurveTo(w * 0.02, h * 0.50, w * 0.18, h * 0.18)
-          } else if (kind === "anywhere") {
-            ctx.moveTo(w * 0.50, h * 0.04)
-            ctx.quadraticCurveTo(w * 0.88, h * 0.08, w * 0.90, h * 0.42)
-            ctx.quadraticCurveTo(w * 0.88, h * 0.82, w * 0.50, h * 0.96)
-            ctx.quadraticCurveTo(w * 0.12, h * 0.82, w * 0.10, h * 0.42)
-            ctx.quadraticCurveTo(w * 0.12, h * 0.08, w * 0.50, h * 0.04)
-          } else {
-            ctx.moveTo(w * 0.56, h * 0.03)
-            ctx.quadraticCurveTo(w * 0.90, h * 0.06, w * 0.93, h * 0.26)
-            ctx.quadraticCurveTo(w * 0.96, h * 0.52, w * 0.88, h * 0.82)
-            ctx.quadraticCurveTo(w * 0.78, h * 0.98, w * 0.52, h * 0.97)
-            ctx.quadraticCurveTo(w * 0.30, h * 0.96, w * 0.26, h * 0.78)
-            ctx.quadraticCurveTo(w * 0.18, h * 0.60, w * 0.04, h * 0.52)
-            ctx.quadraticCurveTo(w * -0.02, h * 0.40, w * 0.08, h * 0.30)
-            ctx.quadraticCurveTo(w * 0.22, h * 0.20, w * 0.32, h * 0.16)
-            ctx.quadraticCurveTo(w * 0.40, h * 0.07, w * 0.56, h * 0.03)
-          }
-          ctx.closePath()
-          strokeFill(ctx)
-          if (kind === "ergo") {
-            ctx.beginPath()
-            ctx.arc(w * 0.50, h * 0.48, Math.min(w, h) * 0.16, 0, Math.PI * 2)
-            ctx.fillStyle = Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
-            ctx.strokeStyle = Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.28)
-            ctx.lineWidth = Math.max(1, width * 0.01)
-            ctx.fill()
-            ctx.stroke()
-          }
-        }
-      }
-
-      Repeater {
-        model: mouseBoardRoot.spots.length
-        Item {
-          required property int index
-          readonly property var cap: mouseBoardRoot.spots[index] || ({})
-          readonly property bool live: !!(cap.row || cap.remap)
-          x: Number(cap.x) * stage.width
-          y: Number(cap.y) * stage.height
-          width: Math.max(18, Number(cap.w) * stage.width)
-          height: Math.max(16, Number(cap.h) * stage.height)
-
-          BorderSurface {
-            anchors.fill: parent
-            radius: cap.shape === "wheel" || cap.shape === "pill" ? Math.min(width, height) / 2 : Style.cornerRadius
-            color: {
-              if (!live) return Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.05)
-              if (String(cap.id) === String(root.selectedDivertId))
-                return Style.hoverFillFor(root.foreground, root.accent)
-              if (cap.row && Number(cap.row.value) !== 0)
-                return Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.28)
-              return Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
-            }
-            borderSpec: Border.controlSpec(
-              String(cap.id) === String(root.selectedDivertId) ? "hover-cursor" : "normal",
-              root.foreground,
-              root.accent
-            )
-
-            Text {
-              anchors.centerIn: parent
-              text: cap.glyph || ""
-              color: live ? root.foreground : root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              opacity: live ? 1 : 0.45
-            }
-
-            MouseArea {
-              anchors.fill: parent
-              enabled: live
-              hoverEnabled: true
-              cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-              onClicked: root.selectedDivertId = String(cap.id)
-            }
-          }
-        }
-      }
-    }
-
-    Flow {
-      visible: mouseBoardRoot.extras.length > 0
-      width: mouseBoardRoot.width
-      spacing: Style.space(6)
-      Repeater {
-        model: mouseBoardRoot.extras.length
-        BorderSurface {
-          required property int index
-          readonly property var cap: mouseBoardRoot.extras[index] || ({})
-          width: extraLabel.implicitWidth + Style.space(16)
-          height: Style.space(32)
-          radius: Style.cornerRadius
-          color: String(cap.id) === String(root.selectedDivertId)
-            ? Style.hoverFillFor(root.foreground, root.accent)
-            : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.10)
-          borderSpec: Border.controlSpec(
-            String(cap.id) === String(root.selectedDivertId) ? "hover-cursor" : "normal",
-            root.foreground,
-            root.accent
-          )
-          Text {
-            id: extraLabel
-            anchors.centerIn: parent
-            text: cap.title || cap.glyph || cap.id
-            textFormat: Text.PlainText
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-          MouseArea {
-            anchors.fill: parent
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.selectedDivertId = String(cap.id)
-          }
-        }
+        if (sliderBlock.setting) root.writeSetting(sliderBlock.setting, Model.snapToChoices(sliderBlock.setting, next), sliderBlock.settingKey)
       }
     }
   }
@@ -1138,10 +947,11 @@ Item {
   component MapRow: Row {
     property var row: ({})
     property var setting: null
+    property string label: row && row.label ? row.label : "Button"
     spacing: Style.space(8)
     Dropdown {
       width: parent.width
-      label: row && row.label ? row.label : "Button"
+      label: parent.label
       value: root.rowValue(row)
       options: root.rowOptions(row)
       foreground: root.foreground
@@ -1167,7 +977,17 @@ Item {
   component ExtraBlock: Column {
     id: extraBlock
     property var setting: null
-    spacing: Style.space(4)
+    spacing: Style.space(10)
+    Text {
+      visible: extraBlock.setting && (extraBlock.setting.kind === "map_choice" || extraBlock.setting.kind === "multiple_toggle")
+      width: parent.width
+      text: extraBlock.setting ? extraBlock.setting.label || extraBlock.setting.name : ""
+      textFormat: Text.PlainText
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
     HintedToggle {
       visible: extraBlock.setting && extraBlock.setting.kind === "toggle"
       width: parent.width
@@ -1188,6 +1008,34 @@ Item {
       visible: extraBlock.setting && extraBlock.setting.kind === "choice"
       width: parent.width
       setting: extraBlock.setting
+    }
+    Repeater {
+      model: extraBlock.setting && (extraBlock.setting.kind === "map_choice" || extraBlock.setting.kind === "multiple_toggle") ? Model.keyRows(extraBlock.setting) : []
+      Column {
+        required property var modelData
+        width: parent.width
+        MapRow {
+          visible: modelData.kind === "choice"
+          width: parent.width
+          row: modelData
+          setting: extraBlock.setting
+        }
+        HintedToggle {
+          visible: modelData.kind === "toggle"
+          width: parent.width
+          label: modelData.label || modelData.key
+          checked: !!modelData.value
+          onClicked: root.writeSetting(extraBlock.setting, !modelData.value, modelData.key)
+        }
+        SliderBlock {
+          visible: modelData.kind === "range"
+          width: parent.width
+          title: modelData.label || modelData.key
+          subtitle: String(modelData.value)
+          setting: Object.assign({}, modelData, { name: extraBlock.setting.name })
+          settingKey: modelData.key
+        }
+      }
     }
   }
 }

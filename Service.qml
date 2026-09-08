@@ -36,6 +36,9 @@ Item {
   property var pendingWrites: []
   property var cmdQueue: []
   property var profiles: []
+  property var actions: []
+  property var applications: []
+  property var actionRuntime: ({})
   property string selectedId: ""
 
   property string probedUid: ""
@@ -158,6 +161,11 @@ Item {
       if (source === "file") lastStatusMs = Date.now()
       applyProgress(parsed)
       if (parsed.hasProfiles) profiles = parsed.profiles
+      if (source === "file") {
+        actions = parsed.actions || []
+        actionRuntime = parsed.actionRuntime || {}
+      }
+      if (parsed.hasActions && !daemonWanted) ensureDaemon()
       var next = parsed.devices || []
       var nextHasHidpp = false
       for (var i = 0; i < next.length; i++) {
@@ -225,6 +233,43 @@ Item {
   function selectDevice(id) {
     userPicked = true
     selectedId = String(id || "")
+  }
+
+  function refreshApplications() {
+    if (!applicationsProcess.running) applicationsProcess.running = true
+  }
+
+  Process {
+    id: applicationsProcess
+    command: ["hyprctl", "-j", "clients"]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var clients = JSON.parse(text)
+          var seen = {}
+          var list = []
+          for (var i = 0; i < clients.length; i++) {
+            var name = String(clients[i].class || "")
+            if (name && !seen["$" + name]) { seen["$" + name] = true; list.push(name) }
+          }
+          root.applications = list.sort()
+        } catch (e) { root.applications = [] }
+      }
+    }
+  }
+
+  function saveAction(binding) {
+    ensureDaemon()
+    writeCmd({ op: "action-save", device: binding.device, binding: binding })
+    actionStatus = "Saving assignment…"
+    actionStatusTimer.restart()
+  }
+
+  function deleteAction(binding) {
+    ensureDaemon()
+    writeCmd({ op: "action-delete", device: binding.device, control: binding.control, app: binding.app })
+    actionStatus = "Removing assignment…"
+    actionStatusTimer.restart()
   }
 
   function saveProfile(name) {

@@ -7,7 +7,7 @@
   "license": "GPL-2.0-or-later",
   "homepage": "https://github.com/zachwilke/omarchy-mxcontrol",
   "repository": "https://github.com/zachwilke/omarchy-mxcontrol.git",
-  "description": "Logi Options+ for Omarchy. Quick controls in the bar; remaps, gestures, and profiles in a settings window.",
+  "description": "Logitech settings for Omarchy, with shortcuts, app-specific actions, gestures, hardware remaps, and local profiles.",
   "dependencies": {
     "required": [
       {
