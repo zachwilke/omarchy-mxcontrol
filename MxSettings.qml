@@ -401,7 +401,7 @@ Item {
             }
 
             SectionCard {
-              visible: root.section === "device" && (!!dpiSetting && root.canWrite)
+              visible: root.section === "device" && ((!!dpiSetting || Model.isMouse(device)) && root.canWrite)
               width: parent.width
               title: "Pointer"
               SliderBlock {
@@ -422,6 +422,24 @@ Item {
                 accent: root.accent
                 fontFamily: root.fontFamily
                 onChanged: function(value) { if (dpiSetting) root.writeSetting(dpiSetting, Number(value)) }
+              }
+              HintedToggle {
+                visible: Model.isMouse(device)
+                width: parent.width
+                label: "macOS-style acceleration"
+                info: Model.pointerAccelHelp()
+                checked: mx.pointerAccelerated
+                onClicked: mx.setPointerAcceleration(mx.pointerAccelerated ? "system" : "mac")
+              }
+              Text {
+                visible: Model.isMouse(device) && !!(mx.pointerRuntime && mx.pointerRuntime.error) && mx.pointerAccelerated
+                width: parent.width
+                text: mx.pointerRuntime && mx.pointerRuntime.error ? String(mx.pointerRuntime.error) : ""
+                textFormat: Text.PlainText
+                color: root.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
               }
             }
 
@@ -674,7 +692,7 @@ Item {
               title: "Local profiles"
               Text {
                 width: parent.width
-                text: "Save this device’s current settings and apply them later. Profiles stay on this computer and exclude the Easy Switch channel."
+                text: "Save this device’s current settings and apply them later. Profiles stay on this computer, include the pointer acceleration choice, and exclude the Easy Switch channel."
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -713,7 +731,7 @@ Item {
                   width: parent.width
                   spacing: Style.space(8)
                   Text {
-                    text: root.hidName(modelData, "Profile")
+                    text: root.hidName(modelData, "Profile") + (Model.profileAccelerated(modelData) ? "  ·  macOS-style acceleration" : "")
                     textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily

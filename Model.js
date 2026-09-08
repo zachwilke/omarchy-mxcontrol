@@ -39,7 +39,10 @@ function emptyStatus(message) {
     adapters: [],
     progress: emptyProgress(),
     hasProfiles: false,
-    profiles: []
+    profiles: [],
+    hasPointer: false,
+    pointer: {},
+    pointerRuntime: {}
   }
 }
 
@@ -88,7 +91,10 @@ function parseStatus(raw) {
       actions: Array.isArray(data.actions) ? data.actions : [],
       actionRuntime: data.actionRuntime || {},
       hasProfiles: Array.isArray(data.profiles),
-      profiles: Array.isArray(data.profiles) ? data.profiles : []
+      profiles: Array.isArray(data.profiles) ? data.profiles : [],
+      hasPointer: data.hasPointer === true || !!(data.pointer && typeof data.pointer === "object" && Object.keys(data.pointer).length > 0),
+      pointer: data.pointer && typeof data.pointer === "object" ? data.pointer : {},
+      pointerRuntime: data.pointerRuntime && typeof data.pointerRuntime === "object" ? data.pointerRuntime : {}
     }
   } catch (e) {
     return emptyStatus("Failed to parse device status")
@@ -1009,6 +1015,36 @@ function keyIsDiverted(row) {
   return name.indexOf("divert") !== -1 || name.indexOf("gesture") !== -1
 }
 
+// Pointer acceleration is a per-device Hyprland (libinput) override kept by
+// the helper, not a HID++ setting. "system" means no override.
+function pointerAccelHelp() {
+  return "Speeds the pointer up as you move faster, the way macOS does, while slow moves stay precise. Applied through Hyprland for this mouse only; DPI still sets the base speed. Saved with profiles."
+}
+
+function pointerMode(pointer, deviceId) {
+  if (!pointer || typeof pointer !== "object" || deviceId === undefined || deviceId === null) return "system"
+  var pref = pointer[String(deviceId)]
+  if (!pref || typeof pref !== "object") return "system"
+  return String(pref.acceleration || "") === "mac" ? "mac" : "system"
+}
+
+function pointerAccelerated(pointer, deviceId) {
+  return pointerMode(pointer, deviceId) === "mac"
+}
+
+function patchPointerMode(pointer, deviceId, mode) {
+  var next = {}
+  var source = pointer && typeof pointer === "object" ? pointer : {}
+  for (var key in source) if (Object.prototype.hasOwnProperty.call(source, key)) next[key] = source[key]
+  if (String(mode) === "mac") next[String(deviceId)] = { acceleration: "mac" }
+  else delete next[String(deviceId)]
+  return next
+}
+
+function profileAccelerated(profile) {
+  return !!(profile && profile.pointer && typeof profile.pointer === "object" && String(profile.pointer.acceleration || "") === "mac")
+}
+
 function helpForSetting(setting, fallback) {
   if (setting && SETTING_HELP[setting.name]) return SETTING_HELP[setting.name]
   var desc = setting && setting.description ? String(setting.description).replace(/\s+/g, " ").trim() : ""
@@ -1138,6 +1174,11 @@ function mergeBluetoothBattery(devices, btDevices) {
 if (typeof module !== "undefined") {
   module.exports = {
     parseStatus: parseStatus,
+    pointerMode: pointerMode,
+    pointerAccelerated: pointerAccelerated,
+    patchPointerMode: patchPointerMode,
+    profileAccelerated: profileAccelerated,
+    pointerAccelHelp: pointerAccelHelp,
     settingByNames: settingByNames,
     isMouse: isMouse,
     isKeyboard: isKeyboard,

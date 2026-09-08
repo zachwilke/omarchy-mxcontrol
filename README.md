@@ -60,7 +60,7 @@ Left in place on purpose:
 | `solaar` package | Shared system package; other tools may use it |
 | `~/.config/solaar/` | Your saved device profiles |
 | Device onboard settings | DPI, SmartShift, remaps live on the hardware |
-| `~/.config/omarchy-mx/` | Local profiles and software action assignments |
+| `~/.config/omarchy-mx/` | Local profiles, software action assignments, and pointer acceleration choices |
 
 Nothing in `~/.config/hypr/` or the rest of `~/.config/omarchy/` is rewritten except the bar layout entry that `omarchy plugin remove` already owns.
 
@@ -107,6 +107,15 @@ A sidebar on wide windows and wrapping tabs on smaller windows separate device c
 - Rename Easy Switch channels (names are stored on the device and show on every computer)
 - Keyboard Fn swap, backlight, platform, disable Caps/Win/Insert
 - Local profiles on this computer (`~/.config/omarchy-mx/profiles.json`) — not Logi cloud, Easy Switch channel is not stored
+- **macOS-style acceleration** per mouse, saved with each profile (see below)
+
+### Pointer acceleration
+
+Coming from a Mac, Linux's default pointer feel can seem flat. **Point & scroll** (and the bar popover) has a **macOS-style acceleration** toggle for each mouse. On, the pointer speeds up as you move faster and stays precise on slow moves; DPI remains the base tracking speed. Off restores whatever your Hyprland `input.accel_profile` says.
+
+The toggle is stored per device in `~/.config/omarchy-mx/pointer.json` and captured by **Save** on the Profiles page, so a "Work" profile can be accelerated while "Games" stays flat. Applying a profile restores its acceleration choice along with the hardware settings.
+
+Under the hood the helper builds a libinput custom acceleration curve scaled to the mouse's current DPI and hands it to Hyprland at runtime through `hl.device({ name = ..., accel_profile = "custom …" })` over the compositor socket. It only ever names the Hyprland device that belongs to that mouse's evdev node, never edits `~/.config/hypr/`, re-applies after a Hyprland config reload, and reverts to the global profile when the toggle is turned off or the helper exits normally. If Hyprland has `input.force_no_accel` on, acceleration cannot apply and the page says so.
 
 ### Software actions
 
@@ -118,7 +127,7 @@ For sequences, enter one shortcut per line (up to eight), for example `CTRL+c` f
 
 For gestures, select **Directional gestures** on a supported control. Configure its click action and any of the four directions. An empty direction does nothing. Actions fire on release; a short movement is treated as a click. Motion is captured while a gesture-enabled button is held, including when an app override uses a simple shortcut. Complex multi-segment gestures, configurable delays, and app-launch steps are not implemented.
 
-Assignments live in `~/.config/omarchy-mx/actions.json`, separately from hardware profiles. The helper automatically resumes saved assignments when the plugin loads. It uses Solaar's library and its own notification read handles; the Solaar GUI does not need to run. Controls already diverted to Solaar are rejected: set their rule handling to **Regular** first, and do not run a separate Solaar rule for the same control.
+Assignments live in `~/.config/omarchy-mx/actions.json`, separately from hardware profiles. The helper automatically resumes saved assignments (and saved pointer acceleration) when the plugin loads. It uses Solaar's library and its own notification read handles; the Solaar GUI does not need to run. Controls already diverted to Solaar are rejected: set their rule handling to **Regular** first, and do not run a separate Solaar rule for the same control.
 
 The action runtime uses temporary diversion, verifies the device’s reported flags, and restores regular input when an assignment is removed or the helper exits normally. If the helper is forcibly killed or a device cannot acknowledge restoration, reconnect that device. After a device wakes or reconnects, a heartbeat checks/rearms its controls (up to 60 seconds). The UI reports listener/dispatch failures. Hardware testing across actual device models and transports remains necessary.
 
@@ -183,7 +192,7 @@ No pip packages, no AUR-only packages, no remote downloads, no install hooks.
 
 ### Privileges
 
-The helper talks to `/dev/hidraw*` as your user. Solaar’s udev rules grant that access after you install Solaar and reconnect the device. The plugin never writes `/etc`, never edits `~/.config/hypr/`, and never starts a second Quickshell process.
+The helper talks to `/dev/hidraw*` as your user. Solaar’s udev rules grant that access after you install Solaar and reconnect the device. The plugin never writes `/etc`, never edits `~/.config/hypr/`, and never starts a second Quickshell process. Pointer acceleration is set at runtime over Hyprland's own socket and is not persisted into any Hyprland config file.
 
 `~/.config/solaar/` is Solaar’s own store. This plugin may update it when you change a setting (through Solaar’s library). Removal does not delete that directory.
 
@@ -205,7 +214,7 @@ Battery: readings come from the kernel's `hidpp_battery_*` power-supply nodes fi
 
 Idle cost: the bar path only scans sysfs (no Solaar import, no hidraw open). The manifest declares a `service` entry point, so the shell instantiates **one shared Service** for the whole plugin — every monitor's bar widget and the settings window drive the same helper, device selection, and snapshot. On shells without plugin services, each widget falls back to a local instance (passive except for one active owner). After you open the panel the helper blocks on inotify for spooled `cmd-*.json` files and hidraw plug events; a 60-second heartbeat re-reads only the battery and stamps the snapshot fresh. Initial reads stream: the helper publishes after every HID++ setting read, so the first controls paint while the rest of the burst is still running.
 
-When software actions are configured, independent read handles block on HID++ button/motion notifications; their workers also block when idle. Shortcuts use direct Hyprland socket requests with a 350 ms deadline and bounded replies, without spawning processes. The 60 ms sequence spacing applies only between steps. Ordinary setting changes keep action listeners running; profile operations pause only the target device. Listener failures wake the helper to restore input on its main thread, and retries back off up to 60 seconds. Assigned controls are checked on the existing heartbeat so they can recover after sleep. With no assignments, these listeners are not started.
+While macOS-style acceleration is on for any mouse, the helper also keeps one connection to Hyprland's event socket so it can re-send the device curve after `configreloaded`; with every mouse on the system default that socket stays closed. When software actions are configured, independent read handles block on HID++ button/motion notifications; their workers also block when idle. Shortcuts use direct Hyprland socket requests with a 350 ms deadline and bounded replies, without spawning processes. The 60 ms sequence spacing applies only between steps. Ordinary setting changes keep action listeners running; profile operations pause only the target device. Listener failures wake the helper to restore input on its main thread, and retries back off up to 60 seconds. Assigned controls are checked on the existing heartbeat so they can recover after sleep. With no assignments, these listeners are not started.
 
 The settings service backs off after helper crashes and bounds its initial snapshot polling to 60 seconds; file watching continues afterward. See the [performance and stability review](docs/performance-stability-review.md) for measurements, regression coverage, and remaining hardware checks.
 

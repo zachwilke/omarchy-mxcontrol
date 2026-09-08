@@ -20,6 +20,7 @@ MX Control is a useful Omarchy interface to Solaar's HID++ settings. It is not y
 | Battery and connection status | Available, with kernel/HID++/Bluetooth sources |
 | DPI, wheel direction, SmartShift | Available when exposed by the device |
 | Pointer speed, report rate, additional keyed settings | Available in Advanced when exposed |
+| macOS-style pointer acceleration | Available per mouse through a runtime Hyprland/libinput custom curve; stored locally and in profiles |
 | Hardware button/key remaps | Available; choices are limited to the hardware's action table |
 | Keyboard Fn, lighting, platform, key disables | Partial; limited to settings and kinds the helper/UI support |
 | Application keyboard shortcuts | Implemented with manual entry, recording, and presets; hardware validation pending |

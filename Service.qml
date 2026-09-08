@@ -37,6 +37,10 @@ Item {
   property var pendingWrites: []
   property var cmdQueue: []
   property var profiles: []
+  // Per-device pointer acceleration overrides ({ deviceId: { acceleration } })
+  // and the helper's report on applying them through Hyprland.
+  property var pointer: ({})
+  property var pointerRuntime: ({})
   property var actions: []
   property var applications: []
   property var actionRuntime: ({})
@@ -165,8 +169,10 @@ Item {
       if (source === "file") {
         actions = parsed.actions || []
         actionRuntime = parsed.actionRuntime || {}
+        pointer = parsed.pointer || {}
+        pointerRuntime = parsed.pointerRuntime || {}
       }
-      if (parsed.hasActions && !daemonWanted) ensureDaemon()
+      if ((parsed.hasActions || parsed.hasPointer) && !daemonWanted) ensureDaemon()
       var next = parsed.devices || []
       var nextHasHidpp = false
       for (var i = 0; i < next.length; i++) {
@@ -294,6 +300,31 @@ Item {
     ensureDaemon()
     writeCmd({ op: "profile-delete", name: String(name) })
     actionStatus = "Deleted profile"
+    actionStatusTimer.restart()
+  }
+
+  readonly property bool pointerAccelerated: pointerModeOf(selectedDevice) === "mac"
+
+  function pointerModeOf(device) {
+    try {
+      return Model.pointerMode(pointer, device ? device.id : "")
+    } catch (e) {
+      return "system"
+    }
+  }
+
+  function setPointerAcceleration(mode) {
+    if (!selectedDevice || selectedDevice.readonly) return
+    var clean = String(mode) === "mac" ? "mac" : "system"
+    ensureDaemon()
+    // Optimistic; the confirming snapshot carries the helper's stored value.
+    try {
+      pointer = Model.patchPointerMode(pointer, String(selectedDevice.id), clean)
+    } catch (e) {
+      console.warn("mx patchPointerMode failed:", e)
+    }
+    writeCmd({ op: "pointer-set", device: String(selectedDevice.id), acceleration: clean })
+    actionStatus = clean === "mac" ? "Turning on macOS-style acceleration…" : "Restoring system pointer acceleration…"
     actionStatusTimer.restart()
   }
 

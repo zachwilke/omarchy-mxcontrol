@@ -951,8 +951,9 @@ def drain_inotify(fd: int) -> None:
         pass
 
 
-def wait_for_event(fds: list[int | None], timeout: float) -> bool:
-    """Block until an inotify fd or wake pipe is readable; drain ready fds."""
+def wait_for_event(fds: list[int | None], timeout: float, keep: tuple = ()) -> bool:
+    """Block until an inotify fd or wake pipe is readable; drain ready fds.
+    Fds in `keep` are left for their owner to read (event streams)."""
     watched = [fd for fd in fds if fd is not None]
     if not watched:
         if timeout > 0:
@@ -960,7 +961,8 @@ def wait_for_event(fds: list[int | None], timeout: float) -> bool:
         return False
     ready, _, _ = select.select(watched, [], [], max(0.0, timeout))
     for fd in ready:
-        drain_inotify(fd)
+        if fd not in keep:
+            drain_inotify(fd)
     return bool(ready)
 
 
@@ -1200,6 +1202,8 @@ def discover_payload() -> dict:
         "ok": True,
         "installed": installed,
         "hasActions": (Path(os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")) / "omarchy-mx" / "actions.json").is_file(),
+        # A saved acceleration override needs the helper running to apply it.
+        "hasPointer": (Path(os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")) / "omarchy-mx" / "pointer.json").is_file(),
         "accessible": any(item.get("accessible") for item in visible) or not visible,
         "message": "" if installed else "Solaar is not installed. Install it with `omarchy pkg add solaar`, then reconnect the device.",
         "importError": "" if installed else "logitech_receiver not found",
@@ -1512,6 +1516,7 @@ def profile_save(mods, opened, cmd: dict) -> None:
         "deviceName": plain_hid_text(str(getattr(dev, "name", "") or "")),
         "kind": str(getattr(dev, "kind", "") or kind_from_name(str(getattr(dev, "name", "") or ""))),
         "settings": snapshot_settings(mods, dev),
+        "pointer": pointer_pref(load_pointer_prefs(), device_id(dev)),
     }
     data = load_profiles()
     next_profiles = [item for item in data["profiles"] if str(item.get("name") or "") != name]
@@ -1525,6 +1530,88 @@ def profile_delete(cmd: dict) -> None:
     data = load_profiles()
     data["profiles"] = [item for item in data["profiles"] if str(item.get("name") or "") != name]
     write_profiles(data)
+
+
+POINTER_FILE = "pointer.json"
+
+
+def pointer_file() -> Path:
+    return profiles_dir() / POINTER_FILE
+
+
+def load_pointer_prefs() -> dict:
+    """Per-device pointer preferences: {"devices": {id: {"acceleration": mode}}}."""
+    from mxpointer import accel_mode
+    empty = {"version": 1, "devices": {}}
+    path = pointer_file()
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return empty
+    except OSError as exc:
+        if _is_nofollow_error(exc):
+            return empty
+        raise
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return empty
+        raw = os.read(fd, PROFILE_MAX_BYTES + 1)
+    finally:
+        os.close(fd)
+    if not raw or len(raw) > PROFILE_MAX_BYTES:
+        return empty
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return empty
+    devices = data.get("devices") if isinstance(data, dict) else None
+    if not isinstance(devices, dict):
+        return empty
+    clean = {}
+    for did, pref in list(devices.items())[:PROFILE_MAX_COUNT]:
+        if not isinstance(pref, dict) or not str(did):
+            continue
+        try:
+            mode = accel_mode(pref.get("acceleration"))
+        except ValueError:
+            continue
+        if mode != "system":
+            clean[str(did)] = {"acceleration": mode}
+    return {"version": 1, "devices": clean}
+
+
+def write_pointer_prefs(data: dict) -> None:
+    devices = {did: pref for did, pref in (data.get("devices") or {}).items() if pref.get("acceleration") != "system"}
+    path = pointer_file()
+    if not devices:
+        path.unlink(missing_ok=True)
+        return
+    raw = (json.dumps({"version": 1, "devices": devices}, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    write_bytes(path, raw)
+    os.chmod(path, 0o600)
+
+
+def pointer_pref(prefs: dict, did: str) -> dict:
+    pref = (prefs.get("devices") or {}).get(str(did)) or {}
+    return {"acceleration": str(pref.get("acceleration") or "system")}
+
+
+def set_pointer_pref(did: str, mode: str) -> None:
+    prefs = load_pointer_prefs()
+    prefs["devices"][str(did)] = {"acceleration": mode}
+    write_pointer_prefs(prefs)
+
+
+def pointer_set(opened, cmd: dict) -> None:
+    from mxpointer import accel_mode
+    mode = accel_mode(cmd.get("acceleration"))
+    devices = list(iter_devices(opened))
+    dev = find_device(devices, str(cmd.get("device") or ""))
+    if not dev:
+        raise RuntimeError(f"no device matching '{cmd.get('device')}'")
+    if not is_mouse_dev(dev):
+        raise ValueError("Pointer acceleration applies to mice only")
+    set_pointer_pref(device_id(dev), mode)
 
 
 def profile_apply(mods, opened, cmd: dict) -> None:
@@ -1542,6 +1629,12 @@ def profile_apply(mods, opened, cmd: dict) -> None:
         raise RuntimeError(f"no device matching '{cmd.get('device')}'")
     if not device_is_online(dev):
         raise RuntimeError(f"{plain_hid_text(getattr(dev, 'name', 'device'))} is offline")
+    pointer = found.get("pointer")
+    if isinstance(pointer, dict):
+        from mxpointer import accel_mode
+        # The pointer preference is local and cheap; restore it even when a
+        # hardware setting below turns out to be unsupported.
+        set_pointer_pref(device_id(dev), accel_mode(pointer.get("acceleration")))
     mods["configuration"].attach_to(dev)
     raw = list(getattr(dev, "settings", None) or [])
     if not any(item is not None for item in raw):
@@ -1625,6 +1718,9 @@ def apply_cmd(mods, opened, cmd: dict) -> None:
         return
     if op == "profile-delete":
         profile_delete(cmd)
+        return
+    if op == "pointer-set":
+        pointer_set(opened, cmd)
         return
     if op == "rename-host":
         devices = list(iter_devices(opened))
@@ -1850,6 +1946,7 @@ def serve_command() -> int:
         return EXIT_PEER_SERVING
     last_text = [""]
     actions = None
+    pointer = None
     published_action_status = None
     runtime_fd = open_inotify(paths, IN_RUNTIME_MASK)
     hidraw_root = Path("/sys/class/hidraw")
@@ -1865,8 +1962,15 @@ def serve_command() -> int:
         payload["profiles"] = load_profiles().get("profiles") or []
         payload["actions"] = actions.bindings if actions else []
         payload["actionRuntime"] = actions.status() if actions else {"activeDevices": [], "available": False, "error": ""}
+        payload["pointer"] = load_pointer_prefs().get("devices") or {}
+        payload["pointerRuntime"] = pointer.status() if pointer else {"available": False, "error": "", "applied": [], "missing": []}
         published_action_status = payload["actionRuntime"]
         write_status(status_path, payload, last_text)
+
+    def sync_pointer(payload: dict, force: bool = False) -> bool:
+        if pointer is None:
+            return False
+        return pointer.sync(list(payload.get("devices") or []), load_pointer_prefs().get("devices") or {}, force=force)
 
     hid_devices, adapters = scan_hidraw_with_battery()
     topology = hidraw_topology()
@@ -1901,7 +2005,9 @@ def serve_command() -> int:
     publish(starting)
     opened, permission_error = open_devices(mods)
     from mxactions import ActionRuntime
+    from mxpointer import PointerRuntime
     actions = ActionRuntime(mods["base"], device_id)
+    pointer = PointerRuntime()
     last_error = ""
     try:
         # Keep hidraw open for the session. Closing it rebinds the Bluetooth
@@ -1920,14 +2026,22 @@ def serve_command() -> int:
             actions.sync(list(iter_devices(opened)), load_actions())
         except Exception as exc:
             actions.report(str(exc))
+        sync_pointer(payload)
         payload["lastError"] = last_error
         publish(payload)
         last_heartbeat = time.monotonic()
         while True:
             cmds = _read_cmds(paths)
             if not cmds:
-                wait_for_event([runtime_fd, hid_fd, actions.wakeup.reader], actions.wait_timeout(idle_timeout))
+                event_fd = pointer.event_fd()
+                wait_for_event(
+                    [runtime_fd, hid_fd, actions.wakeup.reader, event_fd],
+                    actions.wait_timeout(idle_timeout),
+                    keep=(event_fd,) if event_fd is not None else (),
+                )
                 cmds = _read_cmds(paths)
+            # A compositor config reload drops runtime device overrides.
+            reloaded = pointer.poll()
             next_topology = hidraw_topology()
             topology_changed = next_topology != topology
             if not cmds and not topology_changed:
@@ -1935,6 +2049,9 @@ def serve_command() -> int:
                 # immediately; only failed sessions retry, with backoff.
                 actions.sync(list(iter_devices(opened)), actions.bindings)
                 action_changed = actions.status() != published_action_status
+                # Only a compositor reload needs IPC here; sync_pointer skips
+                # the compositor entirely while its inputs are unchanged.
+                pointer_changed = sync_pointer(payload, force=reloaded)
                 # Battery must stay accurate while the snapshot sits idle.
                 # The kernel power_supply nodes are free to read, so check
                 # them on every wake (<=30s latency); the HID++ radio read
@@ -1947,7 +2064,7 @@ def serve_command() -> int:
                     actions.check(list(iter_devices(opened)))
                     payload["lastError"] = last_error
                     publish(payload)
-                elif sysfs_changed or action_changed:
+                elif sysfs_changed or action_changed or pointer_changed:
                     payload["lastError"] = last_error
                     publish(payload)
                 continue
@@ -2003,12 +2120,16 @@ def serve_command() -> int:
             except Exception as exc:
                 last_error = plain_hid_text(str(exc))
             actions.sync(list(iter_devices(opened)), actions.bindings)
+            # DPI edits rescale the curve; new hidraw nodes may be new mice.
+            sync_pointer(payload, force=topology_changed or reloaded)
             payload["lastError"] = last_error
             publish(payload)
             last_heartbeat = time.monotonic()
     except KeyboardInterrupt:
         pass
     finally:
+        if pointer:
+            pointer.shutdown()
         if actions:
             actions.shutdown()
         close_inotify(runtime_fd, hid_fd)

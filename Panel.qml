@@ -38,7 +38,8 @@ Panel {
   readonly property var hostOptions: Model.hostOptions(device)
   readonly property bool showDevices: mx && mx.displayDevices && mx.displayDevices.length > 1
   readonly property var adapters: mx && mx.adapters ? mx.adapters : []
-  readonly property bool showPointer: !!(dpiSetting || pointerSetting)
+  readonly property bool showAccel: !!(mx && Model.isMouse(device))
+  readonly property bool showPointer: !!(dpiSetting || pointerSetting || showAccel)
   readonly property bool showScroll: !!(smartSetting || smartThresholdSetting || invertSetting || hiresSetting)
   readonly property bool showThumb: !!(thumbInvertSetting || thumbModeSetting)
   readonly property bool showHosts: !!(hostSetting || (device && device.hosts && device.hosts.length))
@@ -152,7 +153,7 @@ Panel {
 
   function sectionCount(section) {
     if (section === "devices") return mx && mx.displayDevices ? mx.displayDevices.length : 0
-    if (section === "pointer") return (dpiSetting ? 1 : 0) + (pointerSetting ? 1 : 0)
+    if (section === "pointer") return (dpiSetting ? 1 : 0) + (pointerSetting ? 1 : 0) + (showAccel ? 1 : 0)
     if (section === "scroll") return (smartSetting ? 1 : 0) + (invertSetting ? 1 : 0) + (hiresSetting ? 1 : 0)
     if (section === "thumb") return (thumbInvertSetting ? 1 : 0) + (thumbModeSetting ? 1 : 0)
     if (section === "hosts") return hostOptions.length
@@ -201,6 +202,8 @@ Panel {
     else if (focusSection === "access" && mx) mx.triggerUdev()
     else if (focusSection === "devices" && mx && mx.displayDevices[cursorIndex])
       chooseDevice(mx.displayDevices[cursorIndex].id)
+    else if (focusSection === "pointer" && showAccel && cursorIndex === (dpiSetting ? 1 : 0) + (pointerSetting ? 1 : 0))
+      mx.setPointerAcceleration(mx.pointerAccelerated ? "system" : "mac")
     else if (focusSection === "scroll" && cursorIndex === 0 && smartSetting) writeToggle(smartSetting)
     else if (focusSection === "scroll" && invertSetting) writeToggle(invertSetting)
     else if (focusSection === "thumb" && thumbInvertSetting) writeToggle(thumbInvertSetting)
@@ -502,6 +505,17 @@ Panel {
               info: Model.helpForSetting(reportSetting, "Raises the report rate to the device maximum when the hardware supports it.")
               checked: reportSetting ? Model.boolValue(reportSetting) : false
               onClicked: root.writeToggle(reportSetting)
+            }
+
+            HintedToggle {
+              visible: root.showAccel
+              width: parent.width
+              label: "macOS-style acceleration"
+              info: Model.pointerAccelHelp()
+              checked: !!(mx && mx.pointerAccelerated)
+              hasCursor: root.cursorActive && root.focusSection === "pointer" && root.cursorIndex === (dpiSetting ? 1 : 0) + (pointerSetting ? 1 : 0)
+              onClicked: if (mx) mx.setPointerAcceleration(mx.pointerAccelerated ? "system" : "mac")
+              onHovered: function(on) { if (on) root.setCursor("pointer", (dpiSetting ? 1 : 0) + (pointerSetting ? 1 : 0)) }
             }
           }
 
