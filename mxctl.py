@@ -952,7 +952,7 @@ def drain_inotify(fd: int) -> None:
 
 
 def wait_for_event(fds: list[int | None], timeout: float) -> bool:
-    """Block until an inotify fd is readable. True if something woke us."""
+    """Block until an inotify fd or wake pipe is readable; drain ready fds."""
     watched = [fd for fd in fds if fd is not None]
     if not watched:
         if timeout > 0:
@@ -1850,12 +1850,14 @@ def serve_command() -> int:
         return EXIT_PEER_SERVING
     last_text = [""]
     actions = None
+    published_action_status = None
     runtime_fd = open_inotify(paths, IN_RUNTIME_MASK)
     hidraw_root = Path("/sys/class/hidraw")
     hid_fd = open_inotify(hidraw_root, IN_HIDRAW_MASK) if hidraw_root.is_dir() else None
     idle_timeout = IDLE_TIMEOUT_SEC if hid_fd is not None else TOPOLOGY_FALLBACK_SEC
 
     def publish(payload: dict) -> None:
+        nonlocal published_action_status
         payload = dict(payload)
         # ts lets the UI tell a live snapshot from a stale cache left behind
         # by a previous session.
@@ -1863,6 +1865,7 @@ def serve_command() -> int:
         payload["profiles"] = load_profiles().get("profiles") or []
         payload["actions"] = actions.bindings if actions else []
         payload["actionRuntime"] = actions.status() if actions else {"activeDevices": [], "available": False, "error": ""}
+        published_action_status = payload["actionRuntime"]
         write_status(status_path, payload, last_text)
 
     hid_devices, adapters = scan_hidraw_with_battery()
@@ -1923,11 +1926,15 @@ def serve_command() -> int:
         while True:
             cmds = _read_cmds(paths)
             if not cmds:
-                wait_for_event([runtime_fd, hid_fd], idle_timeout)
+                wait_for_event([runtime_fd, hid_fd, actions.wakeup.reader], actions.wait_timeout(idle_timeout))
                 cmds = _read_cmds(paths)
             next_topology = hidraw_topology()
             topology_changed = next_topology != topology
             if not cmds and not topology_changed:
+                # Worker failures restore input on the command-handle owner
+                # immediately; only failed sessions retry, with backoff.
+                actions.sync(list(iter_devices(opened)), actions.bindings)
+                action_changed = actions.status() != published_action_status
                 # Battery must stay accurate while the snapshot sits idle.
                 # The kernel power_supply nodes are free to read, so check
                 # them on every wake (<=30s latency); the HID++ radio read
@@ -1940,7 +1947,7 @@ def serve_command() -> int:
                     actions.check(list(iter_devices(opened)))
                     payload["lastError"] = last_error
                     publish(payload)
-                elif sysfs_changed:
+                elif sysfs_changed or action_changed:
                     payload["lastError"] = last_error
                     publish(payload)
                 continue
@@ -1954,13 +1961,13 @@ def serve_command() -> int:
                         if cmd.get("op") in ("action-save", "action-delete"):
                             action_command(mods, opened, cmd, actions)
                         else:
-                            # Profiles must capture regular device settings, not our
-                            # temporary diversion flags. Hardware edits also pause
-                            # listeners to avoid simultaneous control writes.
+                            # Profiles capture regular settings. Ordinary edits
+                            # share the main thread and need no listener restart.
                             if cmd.get("op") in ("set", "profile-save", "profile-apply"):
                                 if cmd.get("setting") == "divert-keys" and any(r["device"] == cmd.get("device") and r["control"] == str(cmd.get("key")) for r in actions.bindings):
                                     raise ValueError("Remove this control's software assignment before changing Solaar rule handling")
-                                actions.close()
+                                if cmd.get("op") in ("profile-save", "profile-apply"):
+                                    actions.pause(str(cmd.get("device") or ""))
                             apply_cmd(mods, opened, cmd)
                         last_error = ""
                     except Exception as exc:
@@ -2003,7 +2010,7 @@ def serve_command() -> int:
         pass
     finally:
         if actions:
-            actions.close()
+            actions.shutdown()
         close_inotify(runtime_fd, hid_fd)
         close_all(mods)
         if lock:

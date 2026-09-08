@@ -2,7 +2,6 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Bluetooth
-import qs.Commons
 import "Model.js" as Model
 
 Item {
@@ -25,6 +24,8 @@ Item {
   property bool accessible: false
   property bool refreshing: false
   property bool daemonWanted: false
+  property int daemonRetryMs: 1000
+  property double daemonStartedMs: 0
   property bool userPicked: false
   property bool hasHidppSnapshot: false
   property string statusText: "Checking…"
@@ -174,7 +175,7 @@ Item {
       // Sysfs discover must not replace a live HID++ read. While serve is
       // starting, discover stdout is also ignored so a late scan cannot
       // clobber the snapshot FileView is about to load.
-      if (!nextHasHidpp && (hasHidppSnapshot || (source === "discover" && daemonWanted)))
+      if (!nextHasHidpp && source === "discover" && (hasHidppSnapshot || daemonWanted))
         return
       var merged = Model.applyPendingWrites(next, pendingWrites)
       next = merged.devices
@@ -184,7 +185,7 @@ Item {
       devices = next
       adapters = parsed.adapters || []
       hasHidppSnapshot = nextHasHidpp && statusIsFresh(parsed)
-      if (nextHasHidpp) hidppTicks = 0
+      if (hasHidppSnapshot) hidppTicks = 0
       if (nextHasHidpp && progressPhase === "idle") {
         progressPercent = 100
         progressDone = progressTotal
@@ -371,6 +372,7 @@ Item {
 
   function teardown() {
     daemonWanted = false
+    daemonRestart.stop()
     peerServing = false
     cmdQueue = []
     if (discoverProcess.running) discoverProcess.running = false
@@ -439,7 +441,9 @@ Item {
     id: statusPoll
     interval: 400
     repeat: true
-    running: root.daemonWanted && !root.hasHidppSnapshot
+    // FileView watches subsequent updates. Bound this startup fallback so
+    // missing Solaar/devices cannot poll the filesystem forever.
+    running: root.daemonWanted && !root.hasHidppSnapshot && root.hidppTicks < 150
     onTriggered: {
       statusFile.reload()
       root.hidppTicks += 1
@@ -448,8 +452,12 @@ Item {
 
   Process {
     id: daemon
-    running: root.daemonWanted && !root.peerServing
+    running: root.daemonWanted && !root.peerServing && !daemonRestart.running
     command: ["python3", root.helperPath, "serve"]
+    onStarted: {
+      root.daemonStartedMs = Date.now()
+      root.hidppTicks = 0
+    }
     onExited: function(exitCode) {
       if (!root.daemonWanted) return
       if (exitCode === 3) {
@@ -457,10 +465,19 @@ Item {
         return
       }
       root.peerServing = false
-      Qt.callLater(function() {
-        if (root.daemonWanted && !root.peerServing && !daemon.running)
-          daemon.running = true
-      })
+      if (Date.now() - root.daemonStartedMs >= 60000)
+        root.daemonRetryMs = 1000
+      daemonRestart.interval = root.daemonRetryMs
+      root.daemonRetryMs = Math.min(60000, root.daemonRetryMs * 2)
+      daemonRestart.restart()
+    }
+  }
+
+  Timer {
+    id: daemonRestart
+    onTriggered: {
+      if (root.daemonWanted && !root.peerServing && !daemon.running)
+        daemon.running = true
     }
   }
 

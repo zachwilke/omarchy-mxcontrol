@@ -170,8 +170,8 @@ The panel’s **Install Solaar** button runs that same command in a terminal (`o
 | `python3 mxctl.py runtime-dir` | Creates the private runtime directory | User |
 | `python3 mxctl.py cleanup` | Plugin unload / remove | User |
 | `hyprctl -j clients` | Populate the application picker when settings opens | User |
-| `hyprctl -j activewindow` | Resolve and verify an action’s target window | User |
-| `hyprctl dispatch hl.dsp.send_shortcut(...)` | Run a user-configured shortcut | User |
+| Hyprland command socket: `j/activewindow` | Resolve and verify an action’s target window | User |
+| Hyprland command socket: `/dispatch hl.dsp.send_shortcut(...)` | Run a user-configured shortcut | User |
 | `omarchy-launch-tui omarchy pkg add solaar` | **Install Solaar** button | User; you confirm the package install |
 | `omarchy-launch-tui sudo bash -lc 'udevadm control --reload-rules && udevadm trigger'` | **Reload udev** button | You type your password in a terminal. Never run automatically. |
 
@@ -198,13 +198,16 @@ python3 mxctl.py cleanup
 python3 -m unittest discover -s test -v
 node test/plain_hid_text.js
 node test/settings_model.js
+python3 test/service_recovery.py # isolated integration test; requires Quickshell
 ```
 
 Battery: readings come from the kernel's `hidpp_battery_*` power-supply nodes first — the kernel keeps them current from device battery events, so they are fresh at zero HID++ radio cost and work for every connection type, even before the helper ever runs. While the helper is serving it re-checks them on every wake (≤30 s) and publishes on change; the HID++ radio read remains only as a slow fallback for devices the kernel does not cover. Bluetooth devices additionally get the BlueZ battery overlay as a last resort.
 
 Idle cost: the bar path only scans sysfs (no Solaar import, no hidraw open). The manifest declares a `service` entry point, so the shell instantiates **one shared Service** for the whole plugin — every monitor's bar widget and the settings window drive the same helper, device selection, and snapshot. On shells without plugin services, each widget falls back to a local instance (passive except for one active owner). After you open the panel the helper blocks on inotify for spooled `cmd-*.json` files and hidraw plug events; a 60-second heartbeat re-reads only the battery and stamps the snapshot fresh. Initial reads stream: the helper publishes after every HID++ setting read, so the first controls paint while the rest of the burst is still running.
 
-When software actions are configured, independent read handles listen for HID++ button/motion notifications. Assigned controls are checked on the existing heartbeat so they can recover after sleep. With no assignments, these listeners are not started.
+When software actions are configured, independent read handles block on HID++ button/motion notifications; their workers also block when idle. Shortcuts use direct Hyprland socket requests with a 350 ms deadline and bounded replies, without spawning processes. The 60 ms sequence spacing applies only between steps. Ordinary setting changes keep action listeners running; profile operations pause only the target device. Listener failures wake the helper to restore input on its main thread, and retries back off up to 60 seconds. Assigned controls are checked on the existing heartbeat so they can recover after sleep. With no assignments, these listeners are not started.
+
+The settings service backs off after helper crashes and bounds its initial snapshot polling to 60 seconds; file watching continues afterward. See the [performance and stability review](docs/performance-stability-review.md) for measurements, regression coverage, and remaining hardware checks.
 
 Saved files under `~/.config/omarchy/plugins/io.github.zachwilke.mx/` reload automatically. If a change looks stale:
 
