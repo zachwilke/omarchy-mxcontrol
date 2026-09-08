@@ -385,7 +385,11 @@ Item {
       cmdQueue = queued
       return
     }
-    cmdProcess.command = ["python3", helperPath, "write-cmd", JSON.stringify(cmd)]
+    // The JSON goes over stdin, never argv: argv is world-readable through
+    // /proc for the life of the process.
+    cmdProcess.payload = JSON.stringify(cmd)
+    cmdProcess.stdinEnabled = true
+    cmdProcess.command = ["python3", helperPath, "write-cmd"]
     cmdProcess.running = true
   }
 
@@ -542,8 +546,16 @@ Item {
 
   Process {
     id: cmdProcess
+    property string payload: ""
     running: false
     command: []
+    stdinEnabled: true
+    onStarted: {
+      write(payload + "\n")
+      payload = ""
+      // Closing stdin hands the helper its EOF.
+      stdinEnabled = false
+    }
     onExited: {
       if (root.cmdQueue.length === 0) return
       var queued = root.cmdQueue.slice()

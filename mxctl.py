@@ -1760,7 +1760,8 @@ def cmd_spool_name() -> str:
 
 
 def write_cmd_command(argv: list[str]) -> None:
-    raw = argv[0] if argv else sys.stdin.read()
+    # One JSON object per line on stdin (argv stays for manual use).
+    raw = argv[0] if argv else sys.stdin.readline()
     if not str(raw).strip():
         fail("missing command json")
     try:

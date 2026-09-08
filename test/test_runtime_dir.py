@@ -110,6 +110,22 @@ class RuntimeDirTests(unittest.TestCase):
         self.assertEqual(written["device"], "abc")
         self.assertEqual(written["value"], 800)
 
+    def test_write_cmd_reads_json_from_stdin(self):
+        # The shell sends the JSON over stdin so it never shows in /proc argv.
+        proc = subprocess.run(
+            [sys.executable, str(HELPER), "write-cmd"],
+            input=json.dumps({"op": "pointer-set", "device": "748DEB1B", "acceleration": "mac"}) + "\n",
+            capture_output=True, text=True, env=os.environ.copy(),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        files = list((Path(self.xdg) / "omarchy-mx").glob("cmd-*.json"))
+        self.assertEqual(len(files), 1)
+        self.assertEqual(json.loads(files[0].read_text())["op"], "pointer-set")
+        service = SERVICE.read_text(encoding="utf-8")
+        self.assertIn('cmdProcess.command = ["python3", helperPath, "write-cmd"]', service)
+        self.assertNotIn('"write-cmd", JSON.stringify', service)
+        self.assertIn("stdinEnabled", service)
+
     def test_write_cmd_burst_keeps_every_command(self):
         for value in (400, 800, 1600):
             proc = self.run_helper("write-cmd", json.dumps({"op": "set", "setting": "dpi", "value": value}))

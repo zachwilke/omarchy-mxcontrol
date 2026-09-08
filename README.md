@@ -9,7 +9,7 @@ Inspired by Logi Options+, with partial hardware-settings coverage. Supported HI
 It lives inside the long-running `omarchy-shell` process. It never starts a second Quickshell instance.
 
 <p align="center">
-  <img src="preview.png" alt="MX Control panel on Omarchy: MX Master 3S over Bluetooth, 1000 DPI with 8K preset, SmartShift, invert scroll, and high-resolution scroll" width="329">
+  <img src="preview.png" alt="MX Control settings window on Omarchy: MX Master 3S over Bluetooth at 850 DPI with macOS-style acceleration, SmartShift, high-resolution scroll, and thumb wheel controls" width="702">
 </p>
 
 ## Install
@@ -96,7 +96,7 @@ omarchy-shell shell hide io.github.zachwilke.mx
 
 A sidebar on wide windows and wrapping tabs on smaller windows separate device controls, button/key actions, Easy Switch, local profiles, and Advanced settings. The window follows the active Omarchy theme and lists only controls reported by the device.
 
-![Settings window with labeled button assignments, shown with mock device data](docs/settings-preview.png)
+![Settings window showing the Point & scroll page for an MX Master 3S](docs/settings-preview.png)
 
 - Hardware button/key remaps, shown as labeled controls
 - Shortcuts and sequences of up to eight shortcuts, with a recorder and common presets
