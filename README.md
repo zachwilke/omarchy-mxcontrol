@@ -207,6 +207,7 @@ python3 mxctl.py cleanup
 python3 -m unittest discover -s test -v
 node test/plain_hid_text.js
 node test/settings_model.js
+node test/solaar_icon.js
 python3 test/service_recovery.py # isolated integration test; requires Quickshell
 ```
 
@@ -228,5 +229,7 @@ omarchy restart shell
 ## License
 
 [GPL-2.0-or-later](LICENSE). Copyright © 2026 Zach Wilke.
+
+The bar widget uses [Solaar’s symbolic icon](THIRD_PARTY.md) (CC BY-SA 3.0, Daniel Pavel), not a Logitech mark.
 
 The Python helper imports Solaar’s `logitech_receiver` library, which is also GPL. See [Solaar](https://github.com/pwr-Solaar/Solaar).
