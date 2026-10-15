@@ -148,7 +148,7 @@ FALLBACK_RECEIVER_PIDS = {
 }
 
 MX_NAME_RE = re.compile(
-    r"(?:\bmx\b|master|anywhere|vertical|ergo|lift|mechanical|keys mini|mx keys|mx master|\bg ?pro\b|\bg\d{3}\b)",
+    r"(?:\bmx\b|master|anywhere|vertical|ergo|lift|mechanical|keys mini|mx keys|mx master|\b(?:g ?)?pro\b|\bg\d{3}\b)",
     re.IGNORECASE,
 )
 
