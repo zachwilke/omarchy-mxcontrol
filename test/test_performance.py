@@ -114,22 +114,75 @@ class PerformanceTests(unittest.TestCase):
         self.assertIn("ipcOwner", bar)
         self.assertIn("enabled: root.ipcOwner", bar)
 
-    def test_device_online_skips_ping_when_known(self):
-        class Online:
-            online = True
-
-            def ping(self):
-                raise AssertionError("ping should not run")
-
-        class Protocol:
+    def test_device_online_uses_ping_not_cached_protocol(self):
+        class Awake:
             online = False
             protocol = 4.5
 
             def ping(self):
-                raise AssertionError("ping should not run")
+                return True
 
-        self.assertTrue(self.mxctl.device_is_online(Online()))
-        self.assertTrue(self.mxctl.device_is_online(Protocol()))
+        class AsleepPaired:
+            # Bolt register_new_device() sets online=True without a ping, and
+            # the descriptor caches HID++ 4.5. That is not a live device.
+            online = True
+            protocol = 4.5
+            _protocol = 4.5
+
+            def ping(self):
+                self.online = False
+                return False
+
+        self.assertTrue(self.mxctl.device_is_online(Awake()))
+        self.assertFalse(self.mxctl.device_is_online(AsleepPaired()))
+
+    def test_device_online_treats_no_such_device_as_offline(self):
+        class NoSuchDevice(Exception):
+            pass
+
+        class AsleepLightspeed:
+            # The receiver answers the ping with UNKNOWN_DEVICE; Solaar raises
+            # NoSuchDevice and leaves the pairing-time online=True in place.
+            online = True
+
+            def ping(self):
+                raise NoSuchDevice()
+
+        class Flaky:
+            online = True
+
+            def ping(self):
+                raise OSError("transient")
+
+        self.assertFalse(self.mxctl.device_is_online(AsleepLightspeed()))
+        self.assertTrue(self.mxctl.device_is_online(Flaky()))
+
+    def test_reset_feature_probe_allows_another_query(self):
+        class Feats:
+            supported = False
+            count = 0
+
+        class Dev:
+            features = Feats()
+            _feature_settings_checked = True
+
+        dev = Dev()
+        self.mxctl.reset_feature_probe(dev)
+        self.assertTrue(dev.features.supported)
+        self.assertFalse(dev._feature_settings_checked)
+
+    def test_progress_complete_requires_settings_on_online_devices(self):
+        described = [
+            {"online": True, "settings": [{"name": "dpi"}]},
+            {"online": True, "settings": []},
+        ]
+        self.assertFalse(self.mxctl.progress_complete(described))
+        described[1]["settings"] = [{"name": "fn-swap"}]
+        self.assertTrue(self.mxctl.progress_complete(described))
+        self.assertEqual(self.mxctl.settings_incomplete({"devices": [
+            {"id": "keys", "settings": [], "readonly": False},
+            {"id": "mouse", "settings": [{"name": "dpi"}], "readonly": False},
+        ]}), ["keys"])
 
     def test_write_status_skips_identical_payload(self):
         path = Path(self.xdg) / "omarchy-mx" / "status.json"

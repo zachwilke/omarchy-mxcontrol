@@ -50,8 +50,10 @@ SKIP_WRITE_KINDS = {"packed_range", "graphic_eq", "color"}
 IDLE_TIMEOUT_SEC = 30.0
 TOPOLOGY_FALLBACK_SEC = 2.0
 # While idle, re-read battery and stamp a fresh ts so the UI can tell a live
-# snapshot from a stale cache. Settings are not re-read on this heartbeat.
+# snapshot from a stale cache. Empty settings are retried on this interval:
+# Bolt children often ping before FEATURE_SET answers.
 HEARTBEAT_SEC = 60.0
+SETTINGS_RETRY_SEC = 2.0
 EXIT_PEER_SERVING = 3
 IN_CREATE = 0x00000100
 IN_MODIFY = 0x00000002
@@ -795,14 +797,17 @@ def ordered_devices(opened) -> list:
 
 
 def device_is_online(dev) -> bool:
-    if getattr(dev, "online", None) is True:
-        return True
-    if getattr(dev, "protocol", None) or getattr(dev, "_protocol", None):
-        return True
+    # Protocol is cached from the descriptor / a past ping. Bolt pairing also
+    # constructs children with online=True. Only a live ping matches Solaar.
     try:
         return bool(dev.ping())
-    except Exception:
-        return bool(getattr(dev, "online", False))
+    except Exception as exc:
+        # A Lightspeed receiver answers a ping for an asleep child itself with
+        # UNKNOWN_DEVICE, and Solaar's Device.ping() lets that escape as
+        # NoSuchDevice without clearing online. It is a live "not reachable".
+        if type(exc).__name__ == "NoSuchDevice":
+            return False
+        return getattr(dev, "online", None) is True
 
 
 def load_settings(mods, dev, live: bool = False, on_setting=None) -> list[dict]:
@@ -836,6 +841,73 @@ def load_settings(mods, dev, live: bool = False, on_setting=None) -> list[dict]:
         if on_setting:
             on_setting(settings, index + 1, total)
     return settings
+
+
+def reset_feature_probe(dev) -> None:
+    """Allow another FEATURE_SET query after a ping-but-empty discovery.
+
+    Solaar marks FeaturesArray.supported False when GetFeature(FEATURE_SET)
+    returns index 0. That sticks for the life of the handle, so a later
+    wake never rediscovers settings.
+    """
+    feats = getattr(dev, "features", None)
+    if feats is not None and not getattr(feats, "count", 0):
+        try:
+            feats.supported = True
+        except Exception:
+            pass
+    try:
+        dev._feature_settings_checked = False
+    except Exception:
+        pass
+
+
+def settings_incomplete(payload: dict | None) -> list[str]:
+    ids = []
+    for item in (payload or {}).get("devices") or []:
+        if item.get("readonly"):
+            continue
+        if item.get("settings"):
+            continue
+        did = str(item.get("id") or "")
+        if did:
+            ids.append(did)
+    return ids
+
+
+def recover_empty_settings(mods, opened, payload, hid_devices, adapters, permission_error, last_error: str = "") -> tuple[dict, bool]:
+    """Re-probe devices that are visible but still have no settings."""
+    needed = settings_incomplete(payload)
+    if not needed:
+        return payload, False
+    by_id = {device_id(dev): dev for dev in iter_devices(opened)}
+    changed = False
+    current = payload
+    for did in needed:
+        dev = by_id.get(did)
+        if dev is None:
+            continue
+        if not device_is_online(dev):
+            if current and any(str(item.get("id")) == did and item.get("online") for item in current.get("devices") or []):
+                for item in current.get("devices") or []:
+                    if str(item.get("id")) == did:
+                        item["online"] = False
+                        changed = True
+            continue
+        reset_feature_probe(dev)
+        nxt = refresh_one_device(
+            mods, opened, hid_devices, adapters, permission_error, did, current, last_error, reuse_hosts=False
+        )
+        if nxt:
+            current = nxt
+            changed = True
+    return current, changed
+
+
+def progress_complete(described: list[dict]) -> bool:
+    if not described:
+        return False
+    return all((not item.get("online")) or (item.get("settings") or []) for item in described)
 
 
 def runtime_path(xdg_runtime_dir: str | None, uid: int) -> str:
@@ -1316,7 +1388,8 @@ def collect_status(mods, opened, hid_devices, adapters, permission_error, full: 
                 )
                 on_partial(snap)
     snap = status_from_described(described, hid_devices, adapters, permission_error, last_error)
-    snap["progress"] = progress_payload(len(described), total, "", "idle" if described else "hidpp")
+    idle = progress_complete(described)
+    snap["progress"] = progress_payload(len(described), total, "", "idle" if idle else "hidpp")
     return snap
 
 
@@ -2035,9 +2108,10 @@ def serve_command() -> int:
             cmds = _read_cmds(paths)
             if not cmds:
                 event_fd = pointer.event_fd()
+                pending_settings = bool(settings_incomplete(payload))
                 wait_for_event(
                     [runtime_fd, hid_fd, actions.wakeup.reader, event_fd],
-                    actions.wait_timeout(idle_timeout),
+                    actions.wait_timeout(SETTINGS_RETRY_SEC if pending_settings else idle_timeout),
                     keep=(event_fd,) if event_fd is not None else (),
                 )
                 cmds = _read_cmds(paths)
@@ -2053,13 +2127,21 @@ def serve_command() -> int:
                 # Only a compositor reload needs IPC here; sync_pointer skips
                 # the compositor entirely while its inputs are unchanged.
                 pointer_changed = sync_pointer(payload, force=reloaded)
+                recovered = False
+                if settings_incomplete(payload):
+                    payload, recovered = recover_empty_settings(
+                        mods, opened, payload, hid_devices, adapters, permission_error, last_error
+                    )
                 # Battery must stay accurate while the snapshot sits idle.
                 # The kernel power_supply nodes are free to read, so check
                 # them on every wake (<=30s latency); the HID++ radio read
                 # runs on the slow heartbeat, and only for devices the
                 # kernel does not cover.
                 sysfs_changed, covered = refresh_batteries_sysfs(payload)
-                if time.monotonic() - last_heartbeat >= HEARTBEAT_SEC:
+                if recovered:
+                    payload["lastError"] = last_error
+                    publish(payload)
+                elif time.monotonic() - last_heartbeat >= HEARTBEAT_SEC:
                     last_heartbeat = time.monotonic()
                     refresh_batteries(opened, payload, skip=covered)
                     actions.check(list(iter_devices(opened)))
