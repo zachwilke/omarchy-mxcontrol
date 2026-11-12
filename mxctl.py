@@ -1154,6 +1154,11 @@ def apply_setting(setting, key, value):
             value = parse_value(value)
         result = setting.write(bool(value), save=True)
     elif kind == "range":
+        # Solaar's ForceSensing reports RANGE when a device has one force button
+        # (MX Master 4) but read() still returns a {button: value} map, so a
+        # saved profile holds a one-entry dict. Use its single value.
+        if isinstance(value, dict) and len(value) == 1:
+            value = next(iter(value.values()))
         result = setting.write(int(value), save=True)
     elif kind == "choice":
         result = setting.write(coerce_choice(setting, value, setting.choices), save=True)
